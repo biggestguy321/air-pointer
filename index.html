@@ -761,7 +761,7 @@ function hostAddLink(link){
   sendToClient(c, { t:'hi2', pid: c.pid });
   if (!game.running) enterGame('linked');
   else show('scr-game');
-  if (vs.active || hd.active){
+  if (vs.active || hd.active || sideAny() || SIDE.pend){
     sendToClient(c, { t:'lob', mode:'busy' });
     toast(c.pid + ' joins after this match');
     return;
@@ -1106,13 +1106,27 @@ function onScreenMsg(o, c){
       if (c){ c.ready = true; c.mode = o.mode === 'pad' ? 'pad' : 'gyro'; }
       net.ready = true; aim.mode = o.mode === 'pad' ? 'pad' : 'gyro';
       if (game.state === 'home' && c && c === net.clients[0]){ c.seat = 'shooter'; sendToClient(c, { t:'go', seat:'nav' }); break; }
+      if (c && (hd.active || sideAny() || SIDE.pend || (vs.active && vs.phase !== 'idle'))){
+        c.cal = true; c.vReady = true;
+        vsCalCheck(); hordeCalCheck(); sideCalCheck();
+        break;
+      }
+      if (c && menu.sel && menu.sel !== 'gallery'){
+        c.vReady = true;
+        refreshLobby(); vsMaybeStart(); hordeMaybeStart(); sideMaybeStart();
+        break;
+      }
       if (net.clients.length === 1 && !vs.active && !hd.active && (!menu.sel || menu.sel === 'gallery')) onCtrlReady();
       else refreshLobby();
       break;
     case 'rc': if ((hd.active || sideAny()) && c && c.seat === 'gunner' && c.aim){ c.aim.padX = 0; c.aim.padY = 0; } else if (isShooter){ aim.padX = 0; aim.padY = 0; toast('Controller re-centered'); } break;
     case 'pi': sendToClient(c, { t:'po', ts:o.ts }); break;
     case 'rtt': if (c) c.rtt = o.ms; refreshLinkLabel(); break;
-    case 'rdy2': if (c){ c.vReady = !!o.v; if (o.mode) c.mode = o.mode; } refreshLobby(); vsMaybeStart(); hordeMaybeStart(); sideMaybeStart(); break;
+    case 'rdy2':
+      if (vs.active || hd.active || sideAny() || SIDE.pend) break;
+      if (c){ c.vReady = !!o.v; if (o.mode) c.mode = o.mode; }
+      refreshLobby(); vsMaybeStart(); hordeMaybeStart(); sideMaybeStart();
+      break;
     case 'swap': vsSwapSeats(); break;
     case 'cal1': if (c) c.cal = true; vsCalCheck(); hordeCalCheck(); sideCalCheck(); break;
     case 'sp': vsSpawnReq(o, c); break;
@@ -1318,7 +1332,7 @@ function ctrlSendTick(){
 let lastFire = 0, lastRelayFirePush = 0;
 function fireFromCtrl(){
   const t = now();
-  if (t - lastFire < 170) return;
+  if (t - lastFire < 140) return;
   lastFire = t;
   net.fireSeq++;
   sendMsg({ t:'f' });
@@ -1933,7 +1947,7 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 ===================================================================== */
 const LANES = 5;
 const BAL = {
-  halfLen: 90, hpMax: 100, energyMax: 10, regen: 1.0, startEnergy: 5, tele: 0.9,
+  halfLen: 90, hpMax: 100, energyMax: 10, regen: 0.7, startEnergy: 4, tele: 0.9,
   smokeDur: 5, comboStep: 4, comboInc: 0.25, comboCap: 2,
   breachBonus: 600, breachPerSec: 8, mineHitPts: 250, mineHitDmg: 10, armorChip: 25,
   cards: {
@@ -1972,7 +1986,7 @@ function colorOf(id){ return net.clients[0] && net.clients[0].pid === id ? 'p1' 
 
 /* ---------------- host: lobby ---------------- */
 function refreshLobby(){
-  if (net.role !== 'screen' || !game.running || vs.active || hd.active) return;
+  if (net.role !== 'screen' || !game.running || vs.active || hd.active || sideAny() || SIDE.pend) return;
   if (!menu.sel && net.clients.length === 1 && net.clients[0].kind === 'relay') menu.sel = 'gallery';
   if (!menu.sel){
     if (net.clients.some(c => c.kind === 'relay')){ game.state = 'wait'; showOverlay('menu'); menuBroadcast(); return; }
@@ -2490,7 +2504,7 @@ function drawVsTarget(t, tm){
   cx2.translate(t.x, t.y);
   cx2.globalAlpha = a;
   const ty = t.vsType;
-  if (ty === 'dart' || ty === 'mine' || ty === 'decoy'){
+  if (ty === 'dart' || ty === 'decoy'){
     const col = ty === 'mine' ? '#ff9a7a' : '#ffb35c';
     if (ty !== 'decoy'){
       cx2.save(); cx2.globalCompositeOperation = 'lighter';
@@ -2518,6 +2532,38 @@ function drawVsTarget(t, tm){
       const s = r*0.34;
       cx2.beginPath(); cx2.moveTo(-s,-s); cx2.lineTo(s,s); cx2.moveTo(s,-s); cx2.lineTo(-s,s); cx2.stroke();
     }
+  } else if (ty === 'mine'){
+    cx2.rotate(tm * 0.8 + (t.spin || 0));
+    cx2.lineCap = 'round';
+    cx2.strokeStyle = '#3a1220';
+    cx2.lineWidth = Math.max(3, r * 0.22);
+    cx2.beginPath();
+    for (let i = 0; i < 8; i++){
+      const an = i / 8 * 6.283;
+      cx2.moveTo(Math.cos(an) * r * 0.7, Math.sin(an) * r * 0.7);
+      cx2.lineTo(Math.cos(an) * r * 1.45, Math.sin(an) * r * 1.45);
+    }
+    cx2.stroke();
+    cx2.strokeStyle = '#ff5470';
+    cx2.lineWidth = Math.max(1.5, r * 0.1);
+    cx2.beginPath();
+    for (let i = 0; i < 8; i++){
+      const an = i / 8 * 6.283;
+      cx2.moveTo(Math.cos(an) * r * 1.2, Math.sin(an) * r * 1.2);
+      cx2.lineTo(Math.cos(an) * r * 1.45, Math.sin(an) * r * 1.45);
+    }
+    cx2.stroke();
+    const mg = cx2.createRadialGradient(-r * 0.3, -r * 0.3, 1, 0, 0, r);
+    mg.addColorStop(0, '#5a2333'); mg.addColorStop(0.6, '#2b0f1c'); mg.addColorStop(1, '#12060d');
+    cx2.fillStyle = mg;
+    cx2.shadowColor = '#ff5470'; cx2.shadowBlur = 12;
+    cx2.beginPath(); cx2.arc(0, 0, r, 0, 6.29); cx2.fill();
+    cx2.shadowBlur = 0;
+    const bl = 0.4 + 0.6 * Math.abs(Math.sin(tm * 6 + (t.spin || 0)));
+    cx2.fillStyle = 'rgba(255,84,112,' + bl.toFixed(2) + ')';
+    cx2.shadowColor = '#ff5470'; cx2.shadowBlur = 14 * bl;
+    cx2.beginPath(); cx2.arc(0, 0, r * 0.34, 0, 6.29); cx2.fill();
+    cx2.shadowBlur = 0;
   } else if (ty === 'kite' || ty === 'splitter' || ty === 'phantom'){
     const col = ty === 'kite' ? '#ffd28a' : (ty === 'splitter' ? '#ffb35c' : '#c9d2ff');
     if (ty === 'phantom'){
@@ -2686,7 +2732,7 @@ function ctrlLobby(o){
   lobMode = o.mode || 'solo';
   if (o.you){ net.seat = o.you.seat; vReadyLocal = !!o.you.rdy; if (o.you.pid) net.pid = o.you.pid; }
   const mp = MPLOBBY.indexOf(lobMode) >= 0;
-  const vsFam = MPLOBBY.indexOf(lobMode) >= 0 || lobMode === 'draft' || lobMode === 'nightfall';
+  const vsFam = lobMode === 'versus' || lobMode === 'draft' || lobMode === 'nightfall';
   const me = $('#lb-me');
   me.classList.remove('p1','p2');
   me.classList.add(net.pid === 'P1' ? 'p1' : 'p2');
@@ -2782,9 +2828,9 @@ async function testMotionInline(){
   motionTested = true;
 }
 async function vsReadyTap(){
-  if (lobMode !== 'versus'){ show('scr-motion'); $('#motion-status').textContent = ''; return; }
+  if (MPLOBBY.indexOf(lobMode) < 0 || !net.ctrlMode){ show('scr-motion'); $('#motion-status').textContent = ''; return; }
   const b = $('#lb-ready');
-  if (!motionTested){ b.textContent = 'Checking sensors\u2026'; await testMotionInline(); }
+  if (!motionTested && net.ctrlMode === 'gyro'){ b.textContent = 'Checking sensors\u2026'; await testMotionInline(); }
   vReadyLocal = !vReadyLocal;
   sendMsg({ t:'rdy2', v: vReadyLocal, mode: net.ctrlMode || 'pad' });
   b.textContent = vReadyLocal ? 'Ready \u2713' : 'Ready';
@@ -2802,8 +2848,9 @@ function showMsg(ic, t, s, btnLabel, fn){
   show('scr-msg');
 }
 function ctrlNeedCal(){
-  if ((net.ctrlMode || 'pad') === 'gyro'){ vsCalMode = true; show('scr-cal'); }
-  else { sendMsg({ t:'cal1' }); showMsg('\ud83c\udfaf', 'Get ready', 'Eyes on the big screen \u2014 starting\u2026'); }
+  if (net.ctrlMode === 'gyro' && motionTested){ vsCalMode = true; show('scr-cal'); }
+  else if (net.ctrlMode === 'pad'){ sendMsg({ t:'cal1' }); showMsg('', 'Get ready', 'Eyes on the big screen \u2014 starting\u2026'); }
+  else { vsCalMode = false; show('scr-motion'); }
 }
 function ctrlGo(o){
   net.seat = o.seat;
