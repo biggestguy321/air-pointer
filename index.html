@@ -330,6 +330,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
 .tvpool .tc{padding:8px 12px;border-radius:12px;background:rgba(255,255,255,.06);border:1px solid var(--line);
   font-size:13px;font-weight:800}
 .tvpool .tc.banned{opacity:.3;text-decoration:line-through;border-color:#ff5470}
+#lb-ic{display:none}
+.modecard .mglyph{display:inline-flex;align-items:center;justify-content:center;width:44px;height:30px;border-radius:8px;
+  border:1px solid rgba(94,242,216,.45);color:var(--aqua);font:800 12px/1 ui-monospace,SFMono-Regular,monospace;letter-spacing:.14em}
+.modecard.locked .mglyph{border-color:var(--line);color:var(--ink-dim)}
+#msg-ic{display:none}
 </style>
 </head>
 <body>
@@ -339,24 +344,22 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
 <!-- ============ LANDING ============ -->
 <section id="scr-landing" class="screen active">
   <div class="stack">
-    <span class="badge">◎ point &nbsp;·&nbsp; tilt &nbsp;·&nbsp; fire</span>
+    <span class="badge">POINT&nbsp;&nbsp;·&nbsp;&nbsp;TILT&nbsp;&nbsp;·&nbsp;&nbsp;FIRE</span>
     <h1 class="logo">AIR POINTER</h1>
-    <p class="sub">Turn your phone into a motion pointer for this screen — then pop targets in a 60-second laser gallery.</p>
+    <p class="sub">Your phone is the controller. This screen is the arena. Solo, co-op, and head-to-head modes.</p>
     <div class="roles">
       <button class="card role" id="btn-screen">
-        <span class="ric">🖥️</span>
         <span class="rt">Use as Screen</span>
-        <span class="rd">Run this on the laptop or TV. Shows the arena and a pairing code.</span>
+        <span class="rd">Run this on the laptop or TV. It shows the arena and a pairing code.</span>
       </button>
       <button class="card role" id="btn-ctrl">
-        <span class="ric">📱</span>
         <span class="rt">Use as Controller</span>
-        <span class="rd">Run this on your phone. Aim by tilting, tap to fire.</span>
+        <span class="rd">Run this on your phone. Tilt to aim, tap to fire.</span>
       </button>
     </div>
     <button class="linkish" id="btn-solo">No phone handy? Play the solo mouse demo →</button>
   </div>
-  <div class="footnote">Pairs via artifact storage, or the public PeerJS broker when opened outside Claude (handshake only) · gameplay streams peer-to-peer</div>
+  <div class="footnote">Pairs peer-to-peer · the code only brokers the handshake · nothing is stored on a server</div>
 </section>
 
 <!-- ============ HOST / CODE ============ -->
@@ -367,11 +370,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
     <div class="wait"><div class="ring"></div><span id="host-status">Waiting for your phone…</span></div>
     <div class="card steps">
       <ol>
-        <li>On your phone, open <b>this same chat</b> in the Claude app (or this artifact's published link).</li>
-        <li>Open the <b>Air Pointer</b> artifact and tap <b>Use as Controller</b>.</li>
-        <li>Enter the code above — the game starts here automatically.</li>
+        <li>On your phone, open <b>this same page</b> — same address.</li>
+        <li>Tap <b>Use as Controller</b>.</li>
+        <li>Enter the code above. The game starts here.</li>
       </ol>
-      <p class="hintline" style="margin:12px 0 0;max-width:none;text-align:left;font-size:13px">Both devices should open the <b>same copy</b>. Or download this file and open it in any two browsers (laptop, phone, TV) — it pairs over the web with the same code.</p>
     </div>
     <button class="btn btn-ghost" id="btn-host-cancel">← Back</button>
   </div>
@@ -395,7 +397,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
 <!-- ============ MOTION PERMISSION ============ -->
 <section id="scr-motion" class="screen">
   <div class="stack">
-    <div style="font-size:56px">📡</div>
     <h2>Let this phone feel motion</h2>
     <p class="hintline">Aiming uses the gyroscope. Your browser will ask once — sensor data never leaves the connection between your two devices.</p>
     <button class="btn btn-primary" id="btn-motion">Enable motion aiming</button>
@@ -407,7 +408,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
 <!-- ============ CALIBRATE ============ -->
 <section id="scr-cal" class="screen">
   <div class="stack">
-    <div style="font-size:56px">🎯</div>
     <h2>Point at the center of the screen</h2>
     <p class="hintline">Hold the phone like a remote — top edge toward the TV. Aim at the middle of the big screen, then set center. You can re-center any time with ⊕.</p>
     <button class="btn btn-aqua" id="btn-cal">Set center</button>
@@ -538,7 +538,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
 </section>
 
 <div id="toast"></div>
-<div id="rotate-hint"><div class="ph">📱</div><h2>Hold your phone upright</h2><p class="hintline">Portrait works best for aiming.</p></div>
+<div id="rotate-hint"><h2>Hold your phone upright</h2><p class="hintline">Portrait works best for aiming.</p></div>
 
 <script>
 /* =====================================================================
@@ -788,38 +788,66 @@ function clientLost(c){
 }
 async function startHostPeer(){
   if (!(await ensurePeerLib())) return false;
-  try {
-    net.peer = new Peer(PEER_PREFIX + net.code, peerCfg);
-    net.peer.on('connection', c => wirePeerConn(c));
-    net.peer.on('error', () => {});
-    return true;
-  } catch(e){ return false; }
+  for (let att = 0; att < 3; att++){
+    const ok = await new Promise(resolve => {
+      let done = false;
+      const fin = v => { if (!done){ done = true; resolve(v); } };
+      let p = null;
+      try { p = new Peer(PEER_PREFIX + net.code, peerCfg); } catch(e){ return fin(false); }
+      const to = setTimeout(() => { if (!done){ try { p.destroy(); } catch(_){} fin(false); } }, 8000);
+      p.on('open', () => {
+        clearTimeout(to);
+        net.peer = p;
+        p.on('connection', c => wirePeerConn(c));
+        p.on('disconnected', () => { try { p.reconnect(); } catch(_){} });
+        fin(true);
+      });
+      p.on('error', e => {
+        if (done) return;
+        clearTimeout(to);
+        try { p.destroy(); } catch(_){}
+        if (e && e.type === 'unavailable-id'){
+          net.code = String(1000 + Math.floor(Math.random()*9000));
+          const tiles = $('#code-tiles').children;
+          for (let i = 0; i < 4; i++) tiles[i].textContent = net.code[i];
+        }
+        fin(false);
+      });
+    });
+    if (ok) return true;
+    await sleep(600);
+  }
+  return false;
 }
-function ctrlTryPeer(code){
+function ctrlTryPeer(code, attempt){
   return new Promise(resolve => { (async () => {
-    if (!(await ensurePeerLib())) return resolve(false);
-    let done = false;
+    if (!(await ensurePeerLib())) return resolve('net');
+    let done = false, sawOpen = false;
     const finish = v => { if (!done){ done = true; resolve(v); } };
     try {
       const p = new Peer(peerCfg); net.peer = p;
       const to = setTimeout(() => {
-        if (!done){ try { p.destroy(); } catch(e){} net.peer = null; finish(false); }
-      }, 9000);
+        if (!done){ try { p.destroy(); } catch(e){} net.peer = null; finish(sawOpen ? 'timeout' : 'net'); }
+      }, 9000 + (attempt || 0) * 2000);
       p.on('open', () => {
+        sawOpen = true;
         const c = p.connect(PEER_PREFIX + code, { reliable: true });
         wirePeerConn(c);
-        c.on('open', () => { clearTimeout(to); finish(true); });
+        c.on('open', () => { clearTimeout(to); finish('ok'); });
       });
       p.on('error', e => {
         if (done) return;
         const t = e && e.type;
-        if (t === 'peer-unavailable' || t === 'network' || t === 'server-error' ||
-            t === 'socket-error' || t === 'socket-closed' || t === 'browser-incompatible'){
+        if (t === 'peer-unavailable'){
           clearTimeout(to); try { p.destroy(); } catch(_){}
-          net.peer = null; finish(false);
+          net.peer = null; finish('unavail');
+        } else if (t === 'network' || t === 'server-error' || t === 'socket-error' ||
+            t === 'socket-closed' || t === 'browser-incompatible'){
+          clearTimeout(to); try { p.destroy(); } catch(_){}
+          net.peer = null; finish('net');
         }
       });
-    } catch(e){ finish(false); }
+    } catch(e){ finish('net'); }
   })(); });
 }
 function ctrlPeerLinked(){
@@ -899,11 +927,11 @@ async function startHost(){
   }
   const peerOk = await startHostPeer(); // web-link listener (works outside the artifact)
   if (!storageOk && !peerOk){
-    toast('No pairing path available in this copy — the solo mouse demo still works.');
+    toast('Couldn’t reach the pairing service — check the connection and refresh. The mouse demo still works.');
     show('scr-landing'); return;
   }
   if (!storageOk){
-    $('#host-status').textContent = 'Waiting for your phone… (web link)';
+    $('#host-status').textContent = 'Waiting for your phone…';
     return;
   }
   // poll for the controller's answer (storage path)
@@ -990,23 +1018,26 @@ async function submitCode(){
     else ctrlWaitLobby();
     return;
   }
-  // no storage room found \u2014 try the public web link (works outside the artifact too)
-  st.textContent = 'Trying the direct web link\u2026';
-  const ok = await ctrlTryPeer(joinCode);
-  if (ok){
-    ctrlWaitLobby();
-    return;
+  // no storage room \u2014 pair over the web link
+  let res = 'net';
+  for (let att = 0; att < 3; att++){
+    st.textContent = att === 0 ? 'Linking to the screen\u2026' : 'Linking to the screen\u2026 (try ' + (att + 1) + ')';
+    res = await ctrlTryPeer(joinCode, att);
+    if (res === 'ok'){ ctrlWaitLobby(); return; }
+    if (att < 2) await sleep(700);
   }
-  let msg = 'No screen found with that code.';
+  let msg = null;
   if (store.ok){
     const b = await store.get('latest');
-    if (b && (Date.now() - (b.ts||0)) < 15*60*1000 && b.code && b.code !== joinCode){
-      msg = 'A screen sharing storage with this device is showing code ' + b.code + ' \u2014 double-check the digits.';
-    } else {
-      msg = 'Couldn\u2019t reach that screen. Both devices need to open the SAME copy \u2014 the same chat on both, or the same published link on both.';
-    }
-  } else {
-    msg = 'Couldn\u2019t reach that screen from here. Check the internet connection, or open the artifact from the same chat on both devices.';
+    if (b && (Date.now() - (b.ts||0)) < 15*60*1000 && b.code && b.code !== joinCode)
+      msg = 'A screen on this device is showing code ' + b.code + ' \u2014 double-check the digits.';
+  }
+  if (!msg){
+    msg = res === 'unavail'
+      ? 'No screen is showing that code right now. Double-check the digits, and make sure the screen page is open.'
+      : res === 'timeout'
+        ? 'Found the screen, but the connection couldn\u2019t open. Put both devices on the same Wi-Fi and try again.'
+        : 'Couldn\u2019t reach the pairing service. Check this phone\u2019s connection and try again.';
   }
   joinFail(msg);
 }
@@ -2861,14 +2892,19 @@ function menuBroadcast(){
   const list = MODES.map(m => ({ id: m.id, ic: m.ic, n: m.n, ok: modeOK(m.id) }));
   for (const c of net.clients) sendToClient(c, { t:'menu', list, picker: net.clients[0] ? net.clients[0].pid : null, you: c.pid });
 }
+const MGLYPH = { gallery:'GA', horde:'HD', versus:'VS', draft:'DR', nightfall:'NF', mduel:'MD' };
 function menuHTML(){
-  const cards = MODES.map(m => {
-    const ok = modeOK(m.id);
-    return '<button class="modecard' + (ok ? '' : ' locked') + '" id="ovl-md-' + m.id + '"' + (ok ? '' : ' disabled') + '>' +
-      '<div class="mi">' + m.ic + '</div><div class="mn">' + m.n + '</div><div class="md">' + m.d + '</div>' +
-      '<div class="mreq">' + m.req + '</div></button>';
-  }).join('');
   const n = net.clients.length;
+  const cards = MODES.map(m => {
+    const ok = modeOK(m);
+    const req = m.id === 'gallery' ? '1 phone' : m.id === 'horde' ? '1\u20132 phones \u00b7 or mouse'
+      : m.id === 'mduel' ? '1 phone + mouse' : '2 phones';
+    return '<button class="modecard' + (ok ? '' : ' locked') + '" id="ovl-md-' + m.id + '"' + (ok ? '' : ' disabled') + '>' +
+      '<span class="mglyph">' + (MGLYPH[m.id] || '') + '</span>' +
+      '<span class="mn" style="display:block">' + m.n + '</span>' +
+      '<span class="md" style="display:block">' + m.d + '</span>' +
+      '<span class="mreq" style="display:block">' + req + '</span></button>';
+  }).join('');
   const sub = n === 0 ? 'Mouse demo \u2014 phones can join with the code any time.'
     : n === 1 ? (net.clients[0].pid + ' picks on their phone \u2014 or click here. A second phone unlocks Versus.')
     : 'P1 picks on their phone \u2014 or click here.';
