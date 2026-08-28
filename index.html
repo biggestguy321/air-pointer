@@ -781,6 +781,7 @@ function clientLost(c){
   net.clients.splice(i, 1);
   if (vs.active){ vsAbort(c.pid + ' disconnected'); return; }
   if (hd.active){ hordeClientLost(c); return; }
+  if (sideAny()){ sideClientLost(c); return; }
   if (menu.sel && !modeOK(menu.sel)) menu.sel = null;
   if (net.clients.length === 0){
     net.linkKind = null;
@@ -1098,9 +1099,9 @@ function linkLost(kind){
 function onScreenMsg(o, c){
   const isShooter = c && c.seat === 'shooter';
   switch(o.t){
-    case 'm': if (hd.active && c && c.seat === 'gunner'){ if (!c.aim) c.aim = { rawYaw:0, rawPitch:0, padX:0, padY:0, mode:null, fresh:0 }; c.aim.rawYaw = o.y; c.aim.rawPitch = o.p; c.aim.mode = 'gyro'; c.aim.fresh = now(); } else if (isShooter){ aim.rawYaw = o.y; aim.rawPitch = o.p; aim.mode = 'gyro'; aim.fresh = now(); } break;
-    case 'd': if (hd.active && c && c.seat === 'gunner'){ if (!c.aim) c.aim = { rawYaw:0, rawPitch:0, padX:0, padY:0, mode:null, fresh:0 }; c.aim.padX += o.x; c.aim.padY += o.y; c.aim.mode = 'pad'; c.aim.fresh = now(); } else if (isShooter){ aim.padX += o.x; aim.padY += o.y; aim.mode = 'pad'; aim.fresh = now(); } break;
-    case 'f': if (hd.active && c && c.seat === 'gunner'){ c.fireQ = true; } else if (isShooter) game.queueFire = true; break;
+    case 'm': if ((hd.active || sideAny()) && c && c.seat === 'gunner'){ if (!c.aim) c.aim = { rawYaw:0, rawPitch:0, padX:0, padY:0, mode:null, fresh:0 }; c.aim.rawYaw = o.y; c.aim.rawPitch = o.p; c.aim.mode = 'gyro'; c.aim.fresh = now(); } else if (isShooter){ aim.rawYaw = o.y; aim.rawPitch = o.p; aim.mode = 'gyro'; aim.fresh = now(); } break;
+    case 'd': if ((hd.active || sideAny()) && c && c.seat === 'gunner'){ if (!c.aim) c.aim = { rawYaw:0, rawPitch:0, padX:0, padY:0, mode:null, fresh:0 }; c.aim.padX += o.x; c.aim.padY += o.y; c.aim.mode = 'pad'; c.aim.fresh = now(); } else if (isShooter){ aim.padX += o.x; aim.padY += o.y; aim.mode = 'pad'; aim.fresh = now(); } break;
+    case 'f': if ((hd.active || sideAny()) && c && c.seat === 'gunner'){ c.fireQ = true; } else if (isShooter) game.queueFire = true; break;
     case 'ready':
       if (c){ c.ready = true; c.mode = o.mode === 'pad' ? 'pad' : 'gyro'; }
       net.ready = true; aim.mode = o.mode === 'pad' ? 'pad' : 'gyro';
@@ -1108,12 +1109,12 @@ function onScreenMsg(o, c){
       if (net.clients.length === 1 && !vs.active && !hd.active && (!menu.sel || menu.sel === 'gallery')) onCtrlReady();
       else refreshLobby();
       break;
-    case 'rc': if (hd.active && c && c.seat === 'gunner' && c.aim){ c.aim.padX = 0; c.aim.padY = 0; } else if (isShooter){ aim.padX = 0; aim.padY = 0; toast('Controller re-centered'); } break;
+    case 'rc': if ((hd.active || sideAny()) && c && c.seat === 'gunner' && c.aim){ c.aim.padX = 0; c.aim.padY = 0; } else if (isShooter){ aim.padX = 0; aim.padY = 0; toast('Controller re-centered'); } break;
     case 'pi': sendToClient(c, { t:'po', ts:o.ts }); break;
     case 'rtt': if (c) c.rtt = o.ms; refreshLinkLabel(); break;
-    case 'rdy2': if (c){ c.vReady = !!o.v; if (o.mode) c.mode = o.mode; } refreshLobby(); vsMaybeStart(); hordeMaybeStart(); break;
+    case 'rdy2': if (c){ c.vReady = !!o.v; if (o.mode) c.mode = o.mode; } refreshLobby(); vsMaybeStart(); hordeMaybeStart(); sideMaybeStart(); break;
     case 'swap': vsSwapSeats(); break;
-    case 'cal1': if (c) c.cal = true; vsCalCheck(); hordeCalCheck(); break;
+    case 'cal1': if (c) c.cal = true; vsCalCheck(); hordeCalCheck(); sideCalCheck(); break;
     case 'sp': vsSpawnReq(o, c); break;
     case 'mode': if (c === net.clients[0] || net.clients.length < 2) hostSetMode(o.m == null ? null : o.m); break;
     case 'ban': drBan(o, c); break;
@@ -1149,6 +1150,10 @@ function onCtrlMsg(o){
         if (o.btn) $('#btn-fire').textContent = o.btn;
         if (o.hint) $('#pad-hint').textContent = o.hint;
       }
+      break;
+    case 'gst':
+      $('#pad-score').style.display = ''; $('#pad-score').textContent = o.a || '';
+      $('#pad-hp').style.display = ''; $('#pad-hp').textContent = o.b || '';
       break;
   }
 }
@@ -1197,6 +1202,7 @@ function fullReset(){
   net.ready = false; net.rtt = null; net.clients = []; net.pid = null; net.seat = null;
   if (typeof vs !== 'undefined'){ vs.active = false; vs.phase = 'idle'; vs.draft = false; }
   if (typeof hd !== 'undefined'){ hd.active = false; hd.phase = 'idle'; hd.gunners = []; }
+  if (typeof mr !== 'undefined'){ mr.active = false; tr.active = false; lz.active = false; SIDE.pend = null; }
   if (typeof menu !== 'undefined') menu.sel = null;
   if (typeof nf !== 'undefined') nf.on = false;
   if (typeof drT !== 'undefined' && drT){ clearInterval(drT); drT = null; }
@@ -1502,6 +1508,32 @@ function showOverlay(kind){
       '<div style="font-size:40px;font-weight:900;color:var(--aqua)">' + team.toLocaleString() + '</div>' + rows +
       (hd.best ? '<p class="hintline">Best run: wave ' + hd.best + '</p>' : '') +
       '<p class="hintline">Back to the lobby in a moment\u2026</p>';
+  } else if (kind === 'sidelobby'){
+    const NAMES = { meteor:'Meteor Rain', tilt:'Tilt Racer', maze:'Labyrinth' };
+    const SUBS = {
+      meteor: 'Rocks split when shot \u2014 don\u2019t let them level the city.',
+      tilt: 'Tilt steers, rocks wreck, gates pay. Three lives each.',
+      maze: net.clients.length === 2
+        ? 'Identical mazes, side by side. First to the glow takes the maze \u2014 first to 2 takes the match. 3 of 10 mazes, drawn at random.'
+        : 'Three random mazes against one clock. Roll to the glow.'
+    };
+    const rows = net.clients.map((c, i) =>
+      '<p class="hintline" style="margin:2px 0"><b style="color:' + (i ? 'var(--zap-hot)' : 'var(--aqua)') + '">' + c.pid + '</b> \u00b7 ' +
+      (c.vReady ? 'ready' : 'getting set') + '</p>').join('');
+    inner.innerHTML = '<div class="eyebrow">Channel</div><div class="big">' + (NAMES[menu.sel] || '') + '</div>' +
+      '<p class="hintline">' + (SUBS[menu.sel] || '') + '</p>' + rows +
+      (net.clients.length ? '<p class="hintline">Press <b>Ready</b> on ' + (net.clients.length === 2 ? 'both phones' : 'the phone') + '.</p>' : '') +
+      ((game.mouse && !net.clients.length) ? btn('ovl-sstart', 'Start') : '') +
+      codeLineHTML() +
+      '<button class="btn btn-ghost" id="ovl-menu">Home</button>';
+  } else if (kind === 'sideres'){
+    const R = SIDE.res || {};
+    const rows = (R.rows || []).map((r, i) =>
+      '<p class="hintline" style="margin:2px 0"><b style="color:' + (i ? 'var(--zap-hot)' : 'var(--aqua)') + '">' + r.pid + '</b> \u00b7 ' + r.txt + '</p>').join('');
+    inner.innerHTML = '<div class="eyebrow">' + (R.eyebrow || 'Results') + '</div><div class="big">' + (R.title || 'Round over') + '</div>' +
+      (R.big ? '<div style="font-size:40px;font-weight:900;color:var(--aqua)">' + R.big + '</div>' : '') +
+      rows + (R.line ? '<p class="hintline">' + R.line + '</p>' : '') +
+      '<p class="hintline">Back to the lobby in a moment\u2026</p>';
   }
   o.classList.add('show');
   const wire = (id, fn) => { const b = $('#'+id); if (b) b.addEventListener('click', fn); };
@@ -1519,6 +1551,7 @@ function showOverlay(kind){
   wire('ovl-md-draft', () => hostSetMode('draft'));
   wire('ovl-md-nightfall', () => hostSetMode('nightfall'));
   wire('ovl-md-mduel', () => hostSetMode('mduel'));
+  wire('ovl-sstart', () => { if (menu.sel === 'meteor' || menu.sel === 'tilt' || menu.sel === 'maze') sideBegin(menu.sel, true); });
   wire('ovl-resume', () => {
     $('#gpanel').classList.remove('open');
     $('#sheet').classList.remove('open');
@@ -1683,6 +1716,10 @@ function loop(){
 
   if (game.state === 'home') homeFrame(dt);
 
+  if (mr.active){ mrFrame(dt); render(t / 1000); return; }
+  if (tr.active){ trFrame(dt); render(t / 1000); return; }
+  if (lz.active){ lzFrame(dt); render(t / 1000); return; }
+
   const playing = game.state === 'play' && !game.paused;
   const drifting = playing || game.state === 'wait' || game.state === 'ready' || game.state === 'end';
 
@@ -1787,10 +1824,17 @@ function render(tm){
   if (hd.active) hdRenderOver(tm);
 
   if (game.state === 'home') drawHome(tm);
+  if (mr.active) mrRender(tm);
+  if (tr.active) trRender(tm);
+  if (lz.active) lzRender(tm);
 
   // crosshair + trail
   if (hd.active){
     drawGunnerCrosshairs(tm);
+  } else if (mr.active){
+    drawGunnerCrosshairs(tm, mr.gunners);
+  } else if (tr.active || lz.active){
+    // cars and balls are the cursors
   } else if (net.linkKind || game.mouse){
     for (let i = ptr.trail.length-1; i >= 1; i--){
       const p = ptr.trail[i];
@@ -1946,6 +1990,7 @@ function refreshLobby(){
     return;
   }
   if (menu.sel === 'horde'){ game.state = 'wait'; showOverlay('hordelobby'); return; }
+  if (menu.sel === 'meteor' || menu.sel === 'tilt' || menu.sel === 'maze'){ game.state = 'wait'; showOverlay('sidelobby'); return; }
   game.state = 'wait'; showOverlay('vslobby');
 }
 function lobBroadcast(only){
@@ -2633,7 +2678,7 @@ function ctrlWaitLobby(){
     }
   }, 7000);
 }
-const MPLOBBY = ['versus', 'draft', 'nightfall', 'horde'];
+const MPLOBBY = ['versus', 'draft', 'nightfall', 'horde', 'meteor', 'tilt', 'maze'];
 function ctrlLobby(o){
   clearTimeout(net.timers.lobWait);
   clearInterval(dkTimer); dkTimer = null;
@@ -2675,6 +2720,22 @@ function ctrlLobby(o){
     $('#lb-swap').style.display = 'none';
     $('#lb-ready').style.display = 'none';
     $('#lb-other').textContent = (o.other && o.other.pid ? o.other.pid : 'P1') + ' is choosing a channel\u2026';
+    show('scr-lobby');
+    return;
+  }
+  if (lobMode === 'meteor' || lobMode === 'tilt' || lobMode === 'maze'){
+    const NM = { meteor:'Meteor Rain', tilt:'Tilt Racer', maze:'Labyrinth' };
+    $('#lb-seatname').textContent = lobMode === 'meteor' ? 'Defender \u2014 shoot the rocks'
+      : lobMode === 'tilt' ? 'Driver \u2014 tilt to steer' : 'Roller \u2014 tilt the ball home';
+    $('#lb-mode').textContent = NM[lobMode] + ' lobby';
+    $('#lb-swap').style.display = 'none';
+    const rb = $('#lb-ready');
+    rb.style.display = ''; rb.textContent = vReadyLocal ? 'Ready \u2713' : 'Ready';
+    rb.classList.toggle('btn-aqua', vReadyLocal);
+    rb.classList.toggle('btn-primary', !vReadyLocal);
+    $('#lb-other').textContent = o.other && o.other.here
+      ? o.other.pid + ' \u00b7 ' + (o.other.rdy ? 'ready' : 'getting set')
+      : 'A second phone can join with the same code.';
     show('scr-lobby');
     return;
   }
@@ -2900,10 +2961,14 @@ function ctrlInter(o){
   if (navigator.vibrate && net.haptics) navigator.vibrate([20,60,20]);
 }
 function ctrlRes(o){
-  if (o.k === 'horde'){
+  if (o.k === 'horde' || o.k === 'meteor' || o.k === 'tilt' || o.k === 'maze'){
     clearInterval(net.timers.sendLoop);
     clearInterval(dkTimer); dkTimer = null;
-    showMsg('\ud83c\udf0a', 'Run over \u2014 wave ' + o.w, o.line || 'Back to the lobby\u2026');
+    const T = { horde: 'Run over \u2014 wave ' + o.w,
+      meteor: 'The city fell' + (o.w ? ' \u2014 ' + o.w + 's' : ''),
+      tilt: 'Wrecked' + (o.w ? ' at ' + o.w + 'm' : ''),
+      maze: 'Labyrinth settled' };
+    showMsg('', T[o.k] || 'Round over', o.line || 'Back to the lobby\u2026');
     return;
   }
   clearInterval(net.timers.sendLoop);
@@ -2912,6 +2977,735 @@ function ctrlRes(o){
   showMsg(tie ? '\ud83e\udd1d' : won ? '\ud83c\udfc6' : '\ud83d\udc80',
     tie ? 'Dead heat' : won ? 'You win!' : 'Defeat', o.line || '');
   if (navigator.vibrate && net.haptics) navigator.vibrate(won ? [30,60,30,60,60] : [80]);
+}
+/* =====================================================================
+   SIDE GAMES — Meteor Rain, Tilt Racer, Labyrinth
+===================================================================== */
+const SIDE = { pend: null, res: null };
+const mr = { active:false, over:false, gunners:[], t:0, spawnT:1.2, goldT:14, meteors:[], builds:[], stT:0 };
+const tr = { active:false, over:false, gunners:[], s:0, v:280, ph1:0, ph2:0, obs:[], gates:[], nextObs:0, nextGate:0, stT:0 };
+const lz = { active:false, over:false, gunners:[], round:0, score:[0,0], state:'count', cT:0, mode2p:false,
+  seedPick:[], geo:[], balls:[], t:0, times:[], winI:-1, winT:0, stT:0 };
+function sideAny(){ return mr.active || tr.active || lz.active; }
+const fx2 = { parts: [], floats: [] };
+function fx2Burst(x, y, col, n, sp){
+  for (let i = 0; i < n; i++){
+    const a = Math.random() * 6.283, v = (sp || 170) * (0.4 + Math.random());
+    fx2.parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0.45 + Math.random() * 0.45, t: 0, col, r: 1.6 + Math.random() * 2.6 });
+  }
+}
+function fx2Float(x, y, txt, col){ fx2.floats.push({ x, y, txt, col, t: 0 }); }
+function fx2Tick(dt){
+  for (let i = fx2.parts.length - 1; i >= 0; i--){
+    const p = fx2.parts[i]; p.t += dt;
+    if (p.t > p.life){ fx2.parts.splice(i, 1); continue; }
+    p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 240 * dt; p.vx *= Math.pow(0.4, dt);
+  }
+  for (let i = fx2.floats.length - 1; i >= 0; i--){
+    const f = fx2.floats[i]; f.t += dt; f.y -= 36 * dt;
+    if (f.t > 1) fx2.floats.splice(i, 1);
+  }
+}
+function fx2Draw(){
+  for (const p of fx2.parts){
+    cx2.globalAlpha = Math.max(0, 1 - p.t / p.life);
+    cx2.fillStyle = p.col;
+    cx2.beginPath(); cx2.arc(p.x, p.y, p.r, 0, 6.29); cx2.fill();
+  }
+  cx2.globalAlpha = 1;
+  cx2.textAlign = 'center';
+  cx2.font = '800 15px -apple-system, system-ui, sans-serif';
+  for (const f of fx2.floats){
+    cx2.globalAlpha = Math.max(0, 1 - f.t);
+    cx2.fillStyle = f.col; cx2.fillText(f.txt, f.x, f.y);
+  }
+  cx2.globalAlpha = 1;
+}
+function sideStateOf(id){ return id === 'meteor' ? mr : id === 'tilt' ? tr : lz; }
+function sidePadCtx(id, c){
+  const m = id === 'meteor' ? { btn:'FIRE', hint:'Break every rock \u00b7 save the city' }
+    : id === 'tilt' ? { btn:'BOOST', hint:'Tilt to steer \u00b7 boost sparingly' }
+    : { btn:'BRAKE', hint:'Tilt to roll the ball to the glow' };
+  sendToClient(c, Object.assign({ t:'padctx' }, m));
+}
+function sideBegin(id, mouseOnly){
+  if (vs.active || hd.active || sideAny()) return;
+  const st = sideStateOf(id);
+  st.active = true; st.over = false;
+  game.mode = id; game.state = 'wait';
+  if (mouseOnly){ game.mouse = true; mouseSeen = false; }
+  game.targets = []; fx2.parts = []; fx2.floats = [];
+  st.gunners = [];
+  const cols = ['#5ef2d8', '#ffb35c'];
+  net.clients.forEach((c, i) => {
+    c.seat = 'gunner'; c.aim = null; c.ptr = null; c.fireQ = false; c.cal = false;
+    st.gunners.push({ pid: c.pid, c, col: cols[i] || '#e9edff', sc: 0, combo: 0, comboT: 0,
+      lives: 3, out: false, inv: 0, offT: 0, shots: 0, hits: 0, boostT: 0, boostCd: 0, brakeCd: 0, x: W / 2, trail: [] });
+  });
+  if (!st.gunners.length && game.mouse)
+    st.gunners.push({ pid:'MOUSE', c: null, col: '#5ef2d8', sc: 0, combo: 0, comboT: 0,
+      lives: 3, out: false, inv: 0, offT: 0, shots: 0, hits: 0, boostT: 0, boostCd: 0, brakeCd: 0, x: W / 2, trail: [] });
+  showOverlay('hide');
+  SIDE.pend = id;
+  let pending = 0;
+  for (const c of net.clients){
+    if (c.mode === 'gyro'){ pending++; sendToClient(c, { t:'needcal' }); }
+    else { c.cal = true; sendToClient(c, { t:'go', seat:'gunner' }); sidePadCtx(id, c); }
+  }
+  if (pending) showOverlay('hcal');
+  else sideLaunch(id);
+}
+function sideCalCheck(){
+  const id = SIDE.pend;
+  if (!id) return;
+  if (!net.clients.every(c => c.seat !== 'gunner' || c.cal)) return;
+  for (const c of net.clients)
+    if (c.seat === 'gunner' && c.mode === 'gyro'){ sendToClient(c, { t:'go', seat:'gunner' }); sidePadCtx(id, c); }
+  sideLaunch(id);
+}
+function sideLaunch(id){
+  SIDE.pend = null;
+  showOverlay('hide');
+  if (id === 'meteor') mrStart(); else if (id === 'tilt') trStart(); else lzStart();
+}
+function sideMaybeStart(){
+  const id = menu.sel;
+  if (id !== 'meteor' && id !== 'tilt' && id !== 'maze') return;
+  if (vs.active || hd.active || sideAny()) return;
+  const cs = net.clients;
+  if (!cs.length || cs.some(c => c.kind === 'relay')) return;
+  if (!cs.every(c => c.vReady)) return;
+  setTimeout(() => {
+    if (!vs.active && !hd.active && !sideAny() && menu.sel === id && net.clients.length && net.clients.every(c => c.vReady)) sideBegin(id, false);
+  }, 700);
+}
+function sideFires(st, cb){
+  for (const g of st.gunners){
+    let fired = false;
+    if (g.c){ if (g.c.fireQ){ g.c.fireQ = false; fired = true; } }
+    else if (game.queueFire){ game.queueFire = false; fired = true; }
+    if (fired && !g.out) cb(g, gunnerPtr(g));
+  }
+}
+function sidePtrs(st, dt){
+  for (const g of st.gunners) if (g.c) updClientPtr(g.c, dt);
+}
+function sideGst(st, dt, bOf){
+  st.stT += dt;
+  if (st.stT < 0.5) return;
+  st.stT = 0;
+  for (const g of st.gunners)
+    if (g.c) sendToClient(g.c, { t:'gst', a: 'You ' + g.sc.toLocaleString(), b: bOf(g) });
+}
+function sideOver(st, kind, resObj, phoneLine, w){
+  if (st.over) return;
+  st.over = true; game.state = 'over';
+  SIDE.res = resObj;
+  broadcast({ t:'res', k: kind, line: phoneLine, w: w });
+  showOverlay('sideres');
+  setTimeout(() => {
+    st.active = false; st.over = false;
+    for (const c of net.clients){ c.vReady = false; c.seat = null; }
+    game.targets = []; fx2.parts = []; fx2.floats = [];
+    resetHudLabels();
+    game.mode = 'gallery'; game.state = 'wait';
+    refreshLobby();
+  }, 6000);
+}
+function sideClientLost(c){
+  for (const st of [mr, tr, lz]){
+    if (!st.active) continue;
+    const i = st.gunners.findIndex(g => g.c === c);
+    if (i >= 0) st.gunners.splice(i, 1);
+    if (!st.gunners.length){
+      st.active = false; st.over = false; SIDE.pend = null;
+      resetHudLabels(); game.state = 'wait'; game.mode = 'gallery';
+      if (menu.sel && !modeOK(menu.sel)) menu.sel = null;
+      if (net.clients.length === 0){
+        net.linkKind = null; setPill('', 'Link lost');
+        if (game.running) showOverlay('lost');
+      } else { toast(c.pid + ' left'); refreshLobby(); }
+    } else if (st === lz && lz.mode2p){
+      const g = st.gunners[0];
+      sideOver(lz, 'maze',
+        { eyebrow:'Labyrinth', title: g.pid + ' takes it', line: c.pid + ' disconnected.', rows: [] },
+        c.pid + ' left \u2014 you take the match.');
+    } else {
+      toast(c.pid + ' left \u2014 carry on');
+    }
+  }
+}
+/* ---------------- METEOR RAIN ---------------- */
+function mrStart(){
+  mr.t = 0; mr.spawnT = 1.0; mr.goldT = 16; mr.meteors = []; mr.stT = 0;
+  mr.builds = [];
+  const n = 7;
+  for (let i = 0; i < n; i++){
+    const bw = W / n * 0.62;
+    mr.builds.push({ x: W * (i + 0.5) / n - bw / 2, w: bw, h: 58 + ((i * 53) % 3) * 24 + Math.random() * 16, hp: 3 });
+  }
+  game.state = 'play';
+  showAnn('DEFEND');
+  sfx.go();
+  mrHud(true);
+}
+function mrGround(x){
+  for (const b of mr.builds) if (b.hp > 0 && x > b.x && x < b.x + b.w) return H - b.h;
+  return H - 8;
+}
+function mrSpawn(sz, x, y, vx){
+  const r = sz === 2 ? 26 : sz === 1 ? 17 : 10;
+  mr.meteors.push({ sz, r, x: x != null ? x : 40 + Math.random() * (W - 80),
+    y: y != null ? y : -30, vx: vx != null ? vx : (Math.random() * 60 - 30),
+    vy: 80 + Math.random() * 60 + mr.t * 0.9, spin: Math.random() * 6.28, vr: Math.random() * 2 - 1, gold: false });
+}
+function mrFrame(dt){
+  mr.t += dt;
+  sidePtrs(mr, dt);
+  sideFires(mr, mrShoot);
+  const solo = mr.gunners.length < 2;
+  mr.spawnT -= dt;
+  if (mr.spawnT <= 0){
+    mrSpawn(mr.t > 30 && Math.random() < 0.3 ? 1 : 2);
+    mr.spawnT = Math.max(0.5, 1.35 - mr.t * 0.0065) * (solo ? 1.32 : 1);
+  }
+  mr.goldT -= dt;
+  if (mr.goldT <= 0){
+    mr.goldT = 20 + Math.random() * 12;
+    mr.meteors.push({ sz: 0, r: 12, x: -30, y: H * 0.16 + Math.random() * H * 0.22, vx: 330 + mr.t, vy: 14, spin: 0, vr: 4, gold: true });
+  }
+  for (let i = mr.meteors.length - 1; i >= 0; i--){
+    const m = mr.meteors[i];
+    m.x += m.vx * dt; m.y += m.vy * dt; m.spin += m.vr * dt;
+    if (m.gold){ if (m.x > W + 40) mr.meteors.splice(i, 1); continue; }
+    if (m.y + m.r >= mrGround(m.x)){
+      mr.meteors.splice(i, 1);
+      fx2Burst(m.x, mrGround(m.x), '#ff7a1a', 16, 220);
+      const b = mr.builds.find(bb => bb.hp > 0 && m.x > bb.x && m.x < bb.x + bb.w);
+      if (b){
+        b.hp--;
+        sfx.bomb();
+        if (b.hp <= 0){ fx2Burst(b.x + b.w / 2, H - b.h / 2, '#9aa3c7', 26, 260); sfx.shatter(); }
+        if (!mr.builds.some(bb => bb.hp > 0)){
+          const rows = mr.gunners.map(g => ({ pid: g.pid, txt: g.sc.toLocaleString() + ' \u00b7 acc ' + (g.shots ? Math.round(g.hits / g.shots * 100) : 0) + '%' }));
+          let best = 0;
+          if (store.ok){ store.set('meteorbest', { s: Math.floor(mr.t) }); }
+          sideOver(mr, 'meteor',
+            { eyebrow:'Meteor Rain', title:'The city fell', big: Math.floor(mr.t) + 's', rows,
+              line:'Survived ' + Math.floor(mr.t) + ' seconds.' },
+            'The city stood ' + Math.floor(mr.t) + 's.', Math.floor(mr.t));
+          return;
+        }
+      }
+    }
+  }
+  for (const g of mr.gunners){
+    g.comboT -= dt;
+    if (g.comboT <= 0) g.combo = 0;
+  }
+  fx2Tick(dt);
+  sideGst(mr, dt, g => 'City ' + Math.round(mr.builds.reduce((s, b) => s + Math.max(0, b.hp), 0) / (mr.builds.length * 3) * 100) + '%');
+  mrHud(false);
+}
+function mrShoot(g, p){
+  g.shots++;
+  sfx.pew();
+  let best = null, bd = 1e9;
+  for (const m of mr.meteors){
+    const d = Math.hypot(p.x - m.x, p.y - m.y);
+    if (d < m.r + 18 && d < bd){ bd = d; best = m; }
+  }
+  if (!best){ g.combo = 0; fx2Burst(p.x, p.y, 'rgba(233,237,255,.5)', 3, 90); return; }
+  g.hits++; g.combo++; g.comboT = 2.4;
+  const mult = 1 + Math.min(g.combo * 0.25, 1);
+  const i = mr.meteors.indexOf(best);
+  mr.meteors.splice(i, 1);
+  if (best.gold){
+    g.sc += Math.round(500 * mult);
+    fx2Burst(best.x, best.y, '#ffd24a', 22, 260);
+    fx2Float(best.x, best.y - 16, '+' + Math.round(500 * mult), '#ffd24a');
+    sfx.gold();
+    return;
+  }
+  const gain = best.sz === 2 ? 40 : best.sz === 1 ? 60 : 100;
+  g.sc += Math.round(gain * mult);
+  fx2Float(best.x, best.y - 14, '+' + Math.round(gain * mult), g.col);
+  if (best.sz > 0){
+    for (const s of [-1, 1]) mrSpawn(best.sz - 1, best.x + s * best.r * 0.5, best.y, best.vx + s * (60 + Math.random() * 40));
+    fx2Burst(best.x, best.y, '#ffb35c', 10, 180);
+    sfx.pop();
+  } else {
+    fx2Burst(best.x, best.y, '#fff', 14, 220);
+    sfx.shatter();
+  }
+}
+function mrHud(force){
+  $('#lbl-l').textContent = 'CITY';
+  $('#score-val').textContent = mr.gunners.reduce((s, g) => s + g.sc, 0).toLocaleString();
+  $('#hp-wrap').style.display = 'block';
+  const pct = mr.builds.reduce((s, b) => s + Math.max(0, b.hp), 0) / Math.max(1, mr.builds.length * 3) * 100;
+  const hf = $('#hp-fill');
+  hf.style.width = pct + '%';
+  hf.className = pct < 30 ? 'low' : pct < 60 ? 'mid' : '';
+  $('#lbl-r').textContent = mr.gunners.map(g => g.pid).join(' / ');
+  $('#combo-val').textContent = mr.gunners.map(g => g.sc.toLocaleString()).join(' \u00b7 ');
+  $('#en-pips').style.display = 'none';
+  $('#combo-mini').style.display = 'none';
+  $('#timertext').textContent = Math.floor(mr.t) + 's';
+  $('#timerfill').style.width = Math.min(100, pct) + '%';
+}
+function mrRender(tm){
+  for (const b of mr.builds){
+    if (b.hp <= 0){
+      cx2.fillStyle = 'rgba(70,78,110,.35)';
+      cx2.fillRect(b.x + 4, H - 14, b.w - 8, 14);
+      continue;
+    }
+    const hp = b.hp / 3;
+    cx2.fillStyle = 'rgba(30,37,64,.95)';
+    cx2.fillRect(b.x, H - b.h, b.w, b.h);
+    cx2.fillStyle = 'rgba(94,242,216,' + (0.10 + hp * 0.14) + ')';
+    for (let wy = H - b.h + 10; wy < H - 8; wy += 16)
+      for (let wx = b.x + 6; wx < b.x + b.w - 8; wx += 13)
+        if (((wx * 7 + wy * 13) | 0) % 5 < 2) cx2.fillRect(wx, wy, 5, 7);
+    if (b.hp < 3){
+      cx2.strokeStyle = 'rgba(255,122,26,.6)';
+      cx2.lineWidth = 1.6;
+      cx2.beginPath();
+      cx2.moveTo(b.x + b.w * 0.3, H - b.h);
+      cx2.lineTo(b.x + b.w * 0.45, H - b.h * 0.55);
+      cx2.lineTo(b.x + b.w * 0.28, H - b.h * 0.3);
+      if (b.hp < 2){ cx2.moveTo(b.x + b.w * 0.7, H - b.h); cx2.lineTo(b.x + b.w * 0.6, H - b.h * 0.4); }
+      cx2.stroke();
+    }
+  }
+  for (const m of mr.meteors){
+    cx2.save();
+    cx2.translate(m.x, m.y);
+    cx2.rotate(m.spin);
+    if (m.gold){
+      cx2.shadowColor = '#ffd24a'; cx2.shadowBlur = 18;
+      cx2.fillStyle = '#ffd24a';
+      cx2.beginPath();
+      for (let i = 0; i < 8; i++){
+        const a = i / 8 * 6.283, rr = i % 2 ? m.r * 0.5 : m.r;
+        cx2[i ? 'lineTo' : 'moveTo'](Math.cos(a) * rr, Math.sin(a) * rr);
+      }
+      cx2.closePath(); cx2.fill();
+      cx2.restore();
+      continue;
+    }
+    const g = cx2.createRadialGradient(-m.r * 0.3, -m.r * 0.3, 1, 0, 0, m.r);
+    g.addColorStop(0, '#c9855c'); g.addColorStop(0.6, '#8a4e2e'); g.addColorStop(1, '#4a2716');
+    cx2.fillStyle = g;
+    cx2.shadowColor = '#ff7a1a'; cx2.shadowBlur = 10;
+    cx2.beginPath();
+    for (let i = 0; i < 7; i++){
+      const a = i / 7 * 6.283, rr = m.r * (0.82 + ((i * 37) % 3) * 0.09);
+      cx2[i ? 'lineTo' : 'moveTo'](Math.cos(a) * rr, Math.sin(a) * rr);
+    }
+    cx2.closePath(); cx2.fill();
+    cx2.shadowBlur = 0;
+    cx2.restore();
+  }
+  fx2Draw();
+}
+/* ---------------- TILT RACER ---------------- */
+function trStart(){
+  tr.s = 0; tr.v = 280; tr.ph1 = Math.random() * 6.28; tr.ph2 = Math.random() * 6.28;
+  tr.obs = []; tr.gates = []; tr.nextObs = 700; tr.nextGate = 1200; tr.stT = 0;
+  for (const g of tr.gunners){ g.x = W / 2; g.lives = 3; g.out = false; g.inv = 0; g.offT = 0; g.sc = 0; g.boostT = 0; g.boostCd = 0; }
+  game.state = 'play';
+  showAnn('DRIVE');
+  sfx.go();
+}
+function trCX(s){ return W / 2 + Math.sin(s * 0.0011 + tr.ph1) * W * 0.17 + Math.sin(s * 0.0027 + tr.ph2) * W * 0.08; }
+function trHW(s){ return clamp(W * 0.17 - s * 0.000012 * W, W * 0.085, W * 0.2); }
+function trY(worldS){ return H * 0.74 - (worldS - tr.s) * 0.9; }
+function trFrame(dt){
+  sidePtrs(tr, dt);
+  tr.v = Math.min(690, tr.v + 7 * dt);
+  sideFires(tr, g => {
+    if (g.boostCd <= 0){ g.boostT = 1.2; g.boostCd = 4; sfx.deploy(); }
+  });
+  let anyBoost = false;
+  for (const g of tr.gunners){
+    g.boostT = Math.max(0, g.boostT - dt);
+    g.boostCd = Math.max(0, g.boostCd - dt);
+    if (g.boostT > 0) anyBoost = true;
+  }
+  tr.s += tr.v * (anyBoost ? 1.18 : 1) * dt;
+  while (tr.nextObs < tr.s + H * 1.4){
+    tr.obs.push({ s: tr.nextObs, off: Math.random() * 1.6 - 0.8, spin: Math.random() * 6.28 });
+    tr.nextObs += clamp(560 - tr.s * 0.012, 240, 560) + Math.random() * 150;
+  }
+  while (tr.nextGate < tr.s + H * 1.4){
+    tr.gates.push({ s: tr.nextGate, done: {} });
+    tr.nextGate += 1100 + Math.random() * 700;
+  }
+  tr.obs = tr.obs.filter(o => o.s > tr.s - 160);
+  tr.gates = tr.gates.filter(o => o.s > tr.s - 160);
+  const carY = H * 0.74;
+  let alive = 0;
+  for (const g of tr.gunners){
+    if (g.out) continue;
+    alive++;
+    g.inv = Math.max(0, g.inv - dt);
+    const p = gunnerPtr(g);
+    g.x += (clamp(p.x, 26, W - 26) - g.x) * (1 - Math.pow(0.0012, dt));
+    const roadC = trCX(tr.s), roadW = trHW(tr.s);
+    if (Math.abs(g.x - roadC) > roadW - 16){
+      g.offT += dt;
+      tr.v = Math.max(240, tr.v - 260 * dt);
+      if (Math.random() < 0.5) fx2Burst(g.x, carY + 12, '#9aa3c7', 1, 90);
+      if (g.offT > 0.9 && g.inv <= 0){ trCrash(g, carY); g.offT = 0; }
+    } else g.offT = Math.max(0, g.offT - dt * 2);
+    g.sc += Math.round(tr.v * dt * 0.1 * (g.boostT > 0 ? 2.2 : 1));
+    if (g.boostT > 0 && Math.random() < 0.8) fx2Burst(g.x, carY + 16, g.col, 1, 120);
+    for (const o of tr.obs){
+      const oy = trY(o.s);
+      if (g.inv <= 0 && Math.abs(oy - carY) < 22){
+        const ox = trCX(o.s) + o.off * trHW(o.s) * 0.8;
+        if (Math.abs(g.x - ox) < 26) trCrash(g, carY);
+      }
+    }
+    for (const gt of tr.gates){
+      const gy = trY(gt.s);
+      if (!gt.done[g.pid] && gy > carY - 8 && gy < carY + 24){
+        const gc = trCX(gt.s), gw = trHW(gt.s) * 0.55;
+        if (Math.abs(g.x - gc) < gw){
+          gt.done[g.pid] = true;
+          g.sc += 150;
+          fx2Float(g.x, carY - 30, '+150', '#5ef2d8');
+          sfx.gold();
+        }
+      }
+    }
+  }
+  if (!alive){
+    const dist = Math.floor(tr.s / 40);
+    if (store.ok) store.set('tiltbest', { m: dist });
+    const rows = tr.gunners.map(g => ({ pid: g.pid, txt: g.sc.toLocaleString() }));
+    sideOver(tr, 'tilt',
+      { eyebrow:'Tilt Racer', title:'Wrecked', big: dist + 'm', rows, line:'Speed peaked at ' + Math.round(tr.v / 8) + ' mph.' },
+      'Wrecked at ' + dist + 'm.', dist);
+    return;
+  }
+  fx2Tick(dt);
+  sideGst(tr, dt, g => '\u2665 ' + g.lives);
+  $('#lbl-l').textContent = 'DISTANCE';
+  $('#score-val').textContent = Math.floor(tr.s / 40) + 'm';
+  $('#hp-wrap').style.display = 'none';
+  $('#lbl-r').textContent = tr.gunners.map(g => g.pid).join(' / ');
+  $('#combo-val').textContent = tr.gunners.map(g => g.out ? '\u2715' : '\u2665' + g.lives).join(' \u00b7 ');
+  $('#en-pips').style.display = 'none'; $('#combo-mini').style.display = 'none';
+  $('#timertext').textContent = Math.round(tr.v / 8) + ' mph';
+  $('#timerfill').style.width = (tr.v / 690 * 100) + '%';
+}
+function trCrash(g, carY){
+  g.lives--; g.inv = 1.6;
+  fx2Burst(g.x, carY, g.col, 20, 260);
+  sfx.bomb();
+  tr.v = Math.max(240, tr.v * 0.6);
+  if (g.lives <= 0){ g.out = true; fx2Burst(g.x, carY, '#ff5470', 30, 300); }
+}
+function trRender(tm){
+  const carY = H * 0.74;
+  cx2.save();
+  cx2.lineWidth = 3;
+  for (const sgn of [-1, 1]){
+    cx2.strokeStyle = 'rgba(94,242,216,.55)';
+    cx2.shadowColor = '#5ef2d8'; cx2.shadowBlur = 8;
+    cx2.beginPath();
+    for (let y = -20; y <= H + 20; y += 12){
+      const ws = tr.s + (carY - y) / 0.9;
+      const x = trCX(ws) + sgn * trHW(ws);
+      if (y === -20) cx2.moveTo(x, y); else cx2.lineTo(x, y);
+    }
+    cx2.stroke();
+  }
+  cx2.shadowBlur = 0;
+  cx2.strokeStyle = 'rgba(233,237,255,.16)';
+  cx2.lineWidth = 2;
+  cx2.setLineDash([12, 18]);
+  cx2.lineDashOffset = (tr.s * 1.1) % 30;
+  cx2.beginPath();
+  for (let y = -20; y <= H + 20; y += 12){
+    const ws = tr.s + (carY - y) / 0.9;
+    const x = trCX(ws);
+    if (y === -20) cx2.moveTo(x, y); else cx2.lineTo(x, y);
+  }
+  cx2.stroke();
+  cx2.setLineDash([]);
+  for (const gt of tr.gates){
+    const gy = trY(gt.s);
+    if (gy < -30 || gy > H + 30) continue;
+    const gc = trCX(gt.s), gw = trHW(gt.s) * 0.55;
+    for (const sgn of [-1, 1]){
+      cx2.fillStyle = '#5ef2d8';
+      cx2.shadowColor = '#5ef2d8'; cx2.shadowBlur = 10;
+      cx2.fillRect(gc + sgn * gw - 3, gy - 14, 6, 28);
+    }
+    cx2.shadowBlur = 0;
+    cx2.strokeStyle = 'rgba(94,242,216,.18)';
+    cx2.lineWidth = 6;
+    cx2.beginPath(); cx2.moveTo(gc - gw, gy); cx2.lineTo(gc + gw, gy); cx2.stroke();
+  }
+  for (const o of tr.obs){
+    const oy = trY(o.s);
+    if (oy < -30 || oy > H + 30) continue;
+    const ox = trCX(o.s) + o.off * trHW(o.s) * 0.8;
+    cx2.save();
+    cx2.translate(ox, oy);
+    cx2.rotate(o.spin + tm * 0.6);
+    cx2.fillStyle = '#ffb35c';
+    cx2.shadowColor = '#ff7a1a'; cx2.shadowBlur = 10;
+    cx2.beginPath();
+    for (let i = 0; i < 6; i++){
+      const a = i / 6 * 6.283, rr = 14 * (0.8 + ((i * 31) % 3) * 0.12);
+      cx2[i ? 'lineTo' : 'moveTo'](Math.cos(a) * rr, Math.sin(a) * rr);
+    }
+    cx2.closePath(); cx2.fill();
+    cx2.restore();
+  }
+  for (const g of tr.gunners){
+    if (g.out){
+      cx2.globalAlpha = 0.4;
+      cx2.fillStyle = '#ff5470';
+      cx2.font = '800 15px ui-monospace, monospace';
+      cx2.textAlign = 'center';
+      cx2.fillText('OUT', g.x, carY);
+      cx2.globalAlpha = 1;
+      continue;
+    }
+    if (g.inv > 0 && Math.floor(g.inv * 10) % 2) continue;
+    cx2.save();
+    cx2.translate(g.x, carY);
+    cx2.shadowColor = g.col; cx2.shadowBlur = 14;
+    const cg = cx2.createLinearGradient(0, -20, 0, 14);
+    cg.addColorStop(0, '#fff'); cg.addColorStop(0.4, g.col); cg.addColorStop(1, 'rgba(20,24,40,.9)');
+    cx2.fillStyle = cg;
+    cx2.beginPath();
+    cx2.moveTo(0, -20); cx2.lineTo(13, 12); cx2.lineTo(0, 5); cx2.lineTo(-13, 12);
+    cx2.closePath(); cx2.fill();
+    cx2.restore();
+  }
+  cx2.restore();
+  fx2Draw();
+}
+/* ---------------- LABYRINTH ---------------- */
+const LZ_SEEDS = [11, 47, 83, 129, 200, 271, 314, 512, 777, 901];
+function mzRand(seed){
+  let a = seed >>> 0;
+  return function(){
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function mzGen(seed, N){
+  const rnd = mzRand(seed);
+  const cells = new Array(N * N).fill(15);
+  const vis = new Array(N * N).fill(false);
+  const DX = [0, 1, 0, -1], DY = [-1, 0, 1, 0], OPP = [2, 3, 0, 1], BIT = [1, 2, 4, 8];
+  const stack = [0]; vis[0] = true;
+  while (stack.length){
+    const cur = stack[stack.length - 1];
+    const cxx = cur % N, cyy = (cur / N) | 0;
+    const opts = [];
+    for (let d = 0; d < 4; d++){
+      const nx = cxx + DX[d], ny = cyy + DY[d];
+      if (nx >= 0 && ny >= 0 && nx < N && ny < N && !vis[ny * N + nx]) opts.push(d);
+    }
+    if (!opts.length){ stack.pop(); continue; }
+    const d = opts[(rnd() * opts.length) | 0];
+    const nx = cxx + DX[d], ny = cyy + DY[d], ni = ny * N + nx;
+    cells[cur] &= ~BIT[d]; cells[ni] &= ~BIT[OPP[d]];
+    vis[ni] = true; stack.push(ni);
+  }
+  for (let k = 0; k < N - 2; k++){
+    const i = (rnd() * N * N) | 0, d = (rnd() * 4) | 0;
+    const cxx = i % N, cyy = (i / N) | 0;
+    const nx = cxx + DX[d], ny = cyy + DY[d];
+    if (nx >= 0 && ny >= 0 && nx < N && ny < N){ cells[i] &= ~BIT[d]; cells[ny * N + nx] &= ~BIT[OPP[d]]; }
+  }
+  return cells;
+}
+function mzRects(cells, N, x0, y0, cs, th){
+  const R = [];
+  R.push({ x: x0 - th, y: y0 - th, w: N * cs + th * 2, h: th });
+  R.push({ x: x0 - th, y: y0 + N * cs, w: N * cs + th * 2, h: th });
+  R.push({ x: x0 - th, y: y0 - th, w: th, h: N * cs + th * 2 });
+  R.push({ x: x0 + N * cs, y: y0 - th, w: th, h: N * cs + th * 2 });
+  for (let cy = 0; cy < N; cy++)
+    for (let cxq = 0; cxq < N; cxq++){
+      const c = cells[cy * N + cxq];
+      const X = x0 + cxq * cs, Y = y0 + cy * cs;
+      if ((c & 2) && cxq < N - 1) R.push({ x: X + cs - th / 2, y: Y - th / 2, w: th, h: cs + th });
+      if ((c & 4) && cy < N - 1) R.push({ x: X - th / 2, y: Y + cs - th / 2, w: cs + th, h: th });
+    }
+  return R;
+}
+function lzStart(){
+  lz.mode2p = lz.gunners.length === 2;
+  lz.round = 0; lz.score = [0, 0]; lz.times = [];
+  const idx = [0,1,2,3,4,5,6,7,8,9];
+  for (let i = idx.length - 1; i > 0; i--){ const j = (Math.random() * (i + 1)) | 0; const t = idx[i]; idx[i] = idx[j]; idx[j] = t; }
+  lz.seedPick = idx.slice(0, 3);
+  game.state = 'play';
+  lzNextMaze();
+}
+function lzNextMaze(){
+  lz.round++;
+  const N = 8;
+  const cells = mzGen(LZ_SEEDS[lz.seedPick[lz.round - 1]], N);
+  lz.geo = [];
+  lz.balls = [];
+  const halves = lz.mode2p ? 2 : 1;
+  const topPad = 78, botPad = 40;
+  const size = halves === 2
+    ? Math.min(W * 0.44, H - topPad - botPad)
+    : Math.min(W * 0.58, H - topPad - botPad);
+  const cs = size / N, th = Math.max(4, cs * 0.15);
+  for (let h = 0; h < halves; h++){
+    const x0 = halves === 2 ? (h === 0 ? W * 0.5 - size - W * 0.025 : W * 0.5 + W * 0.025) : (W - size) / 2;
+    const y0 = topPad + (H - topPad - botPad - size) / 2;
+    lz.geo.push({ x0, y0, cs, th, N,
+      rects: mzRects(cells, N, x0, y0, cs, th),
+      goal: { x: x0 + (N - 0.5) * cs, y: y0 + (N - 0.5) * cs } });
+    lz.balls.push({ x: x0 + cs / 2, y: y0 + cs / 2, vx: 0, vy: 0, trail: [] });
+  }
+  lz.state = 'count'; lz.cT = 2.0; lz.t = 0; lz.winI = -1;
+  showAnn('MAZE ' + lz.round);
+}
+function lzFrame(dt){
+  sidePtrs(lz, dt);
+  sideFires(lz, g => {
+    if (g.brakeCd <= 0){
+      g.brakeCd = 0.5;
+      const i = lz.gunners.indexOf(g);
+      const b = lz.balls[Math.min(i, lz.balls.length - 1)];
+      if (b){ b.vx *= 0.28; b.vy *= 0.28; fx2Burst(b.x, b.y, g.col, 5, 90); }
+    }
+  });
+  for (const g of lz.gunners) g.brakeCd = Math.max(0, g.brakeCd - dt);
+  if (lz.state === 'count'){
+    lz.cT -= dt;
+    if (lz.cT <= 0){ lz.state = 'play'; showAnn('GO'); sfx.go(); }
+    fx2Tick(dt);
+    return;
+  }
+  if (lz.state === 'win'){
+    lz.winT -= dt;
+    fx2Tick(dt);
+    if (lz.winT <= 0){
+      if (lz.mode2p && Math.max(lz.score[0], lz.score[1]) >= 2){
+        const wi = lz.score[0] > lz.score[1] ? 0 : 1;
+        const g = lz.gunners[wi];
+        const rows = lz.gunners.map((gg, i) => ({ pid: gg.pid, txt: lz.score[i] + (lz.score[i] === 1 ? ' maze' : ' mazes') }));
+        sideOver(lz, 'maze',
+          { eyebrow:'Labyrinth', title: g.pid + ' takes it', big: lz.score.join(' \u2013 '), rows, line:'Best of three, settled.' },
+          g.pid + ' wins ' + lz.score.join('\u2013') + '.');
+        return;
+      }
+      if (!lz.mode2p && lz.round >= 3){
+        const total = lz.times.reduce((s, x) => s + x, 0);
+        if (store.ok) store.set('mazebest', { t: Math.round(total * 10) / 10 });
+        sideOver(lz, 'maze',
+          { eyebrow:'Labyrinth', title:'Time attack', big: total.toFixed(1) + 's', 
+            rows: lz.times.map((x, i) => ({ pid: 'Maze ' + (i + 1), txt: x.toFixed(1) + 's' })), line:'Three mazes, one clock.' },
+          'Three mazes in ' + total.toFixed(1) + 's.');
+        return;
+      }
+      lzNextMaze();
+    }
+    return;
+  }
+  lz.t += dt;
+  for (let i = 0; i < lz.balls.length; i++){
+    const g = lz.gunners[Math.min(i, lz.gunners.length - 1)];
+    const b = lz.balls[i], geo = lz.geo[i];
+    const p = gunnerPtr(g);
+    const tx = clamp((p.x - W / 2) / (W * 0.32), -1, 1);
+    const ty = clamp((p.y - H / 2) / (H * 0.32), -1, 1);
+    b.vx += tx * 1350 * dt; b.vy += ty * 1350 * dt;
+    const fr = Math.pow(0.5, dt);
+    b.vx *= fr; b.vy *= fr;
+    const mv = 640;
+    const sp = Math.hypot(b.vx, b.vy);
+    if (sp > mv){ b.vx *= mv / sp; b.vy *= mv / sp; }
+    const r = geo.cs * 0.26;
+    b.x += b.vx * dt;
+    for (const rc of geo.rects){
+      if (b.x + r > rc.x && b.x - r < rc.x + rc.w && b.y + r > rc.y && b.y - r < rc.y + rc.h){
+        if (b.vx > 0) b.x = rc.x - r; else b.x = rc.x + rc.w + r;
+        b.vx *= -0.32;
+      }
+    }
+    b.y += b.vy * dt;
+    for (const rc of geo.rects){
+      if (b.x + r > rc.x && b.x - r < rc.x + rc.w && b.y + r > rc.y && b.y - r < rc.y + rc.h){
+        if (b.vy > 0) b.y = rc.y - r; else b.y = rc.y + rc.h + r;
+        b.vy *= -0.32;
+      }
+    }
+    b.trail.unshift({ x: b.x, y: b.y });
+    if (b.trail.length > 10) b.trail.pop();
+    if (Math.hypot(b.x - geo.goal.x, b.y - geo.goal.y) < geo.cs * 0.34){
+      lz.state = 'win'; lz.winT = 1.5; lz.winI = i;
+      fx2Burst(geo.goal.x, geo.goal.y, g.col, 26, 240);
+      sfx.win();
+      if (lz.mode2p){ lz.score[i]++; showAnn(g.pid + ' \u2713'); }
+      else { lz.times.push(lz.t); showAnn(lz.t.toFixed(1) + 's'); }
+      break;
+    }
+  }
+  fx2Tick(dt);
+  sideGst(lz, dt, g => lz.mode2p ? lz.score.join(' \u2013 ') : 'Maze ' + lz.round + '/3');
+  $('#lbl-l').textContent = 'MAZE ' + lz.round + '/3';
+  $('#score-val').textContent = lz.mode2p ? lz.score.join(' \u2013 ') : lz.t.toFixed(1) + 's';
+  $('#hp-wrap').style.display = 'none';
+  $('#lbl-r').textContent = lz.gunners.map(g => g.pid).join(' / ');
+  $('#combo-val').textContent = lz.mode2p ? 'FIRST TO 2' : 'TIME ATTACK';
+  $('#en-pips').style.display = 'none'; $('#combo-mini').style.display = 'none';
+  $('#timertext').textContent = lz.mode2p ? 'FIRST TO 2' : lz.t.toFixed(1) + 's';
+  $('#timerfill').style.width = (lz.round / 3 * 100) + '%';
+}
+function lzRender(tm){
+  for (let i = 0; i < lz.geo.length; i++){
+    const geo = lz.geo[i], g = lz.gunners[Math.min(i, lz.gunners.length - 1)];
+    cx2.fillStyle = 'rgba(255,255,255,.03)';
+    cx2.fillRect(geo.x0 - geo.th * 2, geo.y0 - geo.th * 2, geo.N * geo.cs + geo.th * 4, geo.N * geo.cs + geo.th * 4);
+    cx2.fillStyle = '#8fa0c9';
+    cx2.shadowColor = 'rgba(143,160,201,.6)'; cx2.shadowBlur = 5;
+    for (const rc of geo.rects) cx2.fillRect(rc.x, rc.y, rc.w, rc.h);
+    cx2.shadowBlur = 0;
+    const pul = 0.5 + Math.sin(tm * 4) * 0.5;
+    const gg = cx2.createRadialGradient(geo.goal.x, geo.goal.y, 1, geo.goal.x, geo.goal.y, geo.cs * 0.42);
+    gg.addColorStop(0, 'rgba(94,242,216,' + (0.85) + ')');
+    gg.addColorStop(1, 'rgba(94,242,216,' + (0.12 + pul * 0.18) + ')');
+    cx2.fillStyle = gg;
+    cx2.beginPath(); cx2.arc(geo.goal.x, geo.goal.y, geo.cs * 0.38, 0, 6.29); cx2.fill();
+    const b = lz.balls[i];
+    for (let k = 1; k < b.trail.length; k++){
+      cx2.globalAlpha = (1 - k / b.trail.length) * 0.3;
+      cx2.fillStyle = g.col;
+      cx2.beginPath(); cx2.arc(b.trail[k].x, b.trail[k].y, geo.cs * 0.16, 0, 6.29); cx2.fill();
+    }
+    cx2.globalAlpha = 1;
+    const bg = cx2.createRadialGradient(b.x - 3, b.y - 3, 1, b.x, b.y, geo.cs * 0.27);
+    bg.addColorStop(0, '#fff'); bg.addColorStop(0.55, g.col); bg.addColorStop(1, 'rgba(20,24,40,.9)');
+    cx2.fillStyle = bg;
+    cx2.shadowColor = g.col; cx2.shadowBlur = 12;
+    cx2.beginPath(); cx2.arc(b.x, b.y, geo.cs * 0.26, 0, 6.29); cx2.fill();
+    cx2.shadowBlur = 0;
+    cx2.textAlign = 'center';
+    cx2.fillStyle = g.col;
+    cx2.font = '800 13px ui-monospace, monospace';
+    cx2.fillText(g.pid, geo.x0 + geo.N * geo.cs / 2, geo.y0 - geo.th * 2 - 8);
+  }
+  fx2Draw();
 }
 /* =====================================================================
    HOME — pointer-driven channel grid
@@ -2924,7 +3718,10 @@ const HOME_TILES = [
   { mode:'draft',     n:'Draft',      g:'DR' },
   { mode:'nightfall', n:'Nightfall',  g:'NF' },
   { mode:'mduel',     n:'Mouse Duel', g:'MD' },
-  null, null, null, null, null, null, null, null, null, null
+  { mode:'meteor', n:'Meteor Rain', g:'MR' },
+  { mode:'tilt',   n:'Tilt Racer',  g:'TR' },
+  { mode:'maze',   n:'Labyrinth',   g:'LZ' },
+  null, null, null, null, null, null, null
 ];
 function homeRects(){
   const topPad = Math.max(84, H * 0.14), botPad = 64, mx = Math.max(40, W * 0.08), gap = Math.round(Math.min(W, H) * 0.018) + 8;
@@ -3117,7 +3914,10 @@ const MODES = [
   { id:'versus',   ic:'\u2694\ufe0f', n:'Versus',       d:'Shooter vs Spawner. Two 90s halves, roles swap.', req:'2 phones' },
   { id:'draft',    ic:'\ud83c\udccf', n:'Draft Versus', d:'Ban a card, draft a 6-card deck + a shooter ability.', req:'2 phones' },
   { id:'nightfall',ic:'\ud83c\udf12', n:'Nightfall',    d:'Versus under two rolled mutators \u2014 blackout, crosswind, gravity wells.', req:'2 phones' },
-  { id:'mduel',    ic:'\ud83d\uddb1\ufe0f', n:'Mouse Duel', d:'Phone spawns, mouse defends. One 90s half.', req:'1 phone' }
+  { id:'mduel',    ic:'\ud83d\uddb1\ufe0f', n:'Mouse Duel', d:'Phone spawns, mouse defends. One 90s half.', req:'1 phone' },
+  { id:'meteor',   ic:'', n:'Meteor Rain',  d:'Rocks split when shot. Don\u2019t let them level the city.', req:'1\u20132 phones or mouse' },
+  { id:'tilt',     ic:'', n:'Tilt Racer',   d:'Tilt to steer, dodge rocks, thread the gates. Three lives.', req:'1\u20132 phones or mouse' },
+  { id:'maze',     ic:'', n:'Labyrinth',    d:'Roll the ball to the glow. Two phones race identical mazes, first to 2.', req:'1\u20132 phones or mouse' }
 ];
 function modeOK(id){
   const n = net.clients.length;
@@ -3125,6 +3925,7 @@ function modeOK(id){
   if (relay) return id === 'gallery' && n === 1;
   if (id === 'gallery') return n === 1 || (n === 0 && game.mouse);
   if (id === 'horde') return (n >= 1 && n <= 2) || (n === 0 && game.mouse);
+  if (id === 'meteor' || id === 'tilt' || id === 'maze') return (n >= 1 && n <= 2) || (n === 0 && game.mouse);
   if (id === 'mduel') return n === 1;
   return n === 2;
 }
@@ -3147,7 +3948,7 @@ function menuBroadcast(){
   const list = MODES.map(x => ({ id: x.id, n: x.n, req: x.req, ok: modeOK(x.id) }));
   for (const c of net.clients) sendToClient(c, { t:'menu', list, picker: net.clients[0] ? net.clients[0].pid : null, you: c.pid });
 }
-const MGLYPH = { gallery:'GA', horde:'HD', versus:'VS', draft:'DR', nightfall:'NF', mduel:'MD' };
+const MGLYPH = { gallery:'GA', horde:'HD', versus:'VS', draft:'DR', nightfall:'NF', mduel:'MD', meteor:'MR', tilt:'TR', maze:'LZ' };
 function codeLineHTML(){
   if (!net.code || net.role !== 'screen' || net.clients.length >= 2 || net.clients.some(c => c.kind === 'relay')) return '';
   return '<p class="codeline">Join code <b>' + net.code + '</b> \u00b7 second phone: same page \u2192 Use as Controller</p>';
@@ -3950,8 +4751,8 @@ function hdRenderPost(tm){
     cx2.fillRect(0, 0, W, H);
   }
 }
-function drawGunnerCrosshairs(tm){
-  for (const g of hd.gunners){
+function drawGunnerCrosshairs(tm, list){
+  for (const g of (list || hd.gunners)){
     const p = gunnerPtr(g);
     const a = g.down > 0 ? 0.3 : 1;
     cx2.save();
