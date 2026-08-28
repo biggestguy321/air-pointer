@@ -338,6 +338,9 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
 #scr-game,#scr-pad{overflow:hidden}
 .padtop .pill{min-width:0;flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #btn-sheet{flex:0 0 44px;margin-left:auto}
+.codeline{font-size:13.5px;color:var(--ink-dim)}
+.codeline b{color:var(--aqua);font:800 15px/1 ui-monospace,SFMono-Regular,monospace;letter-spacing:.22em;padding:3px 9px;
+  border:1px solid rgba(94,242,216,.4);border-radius:8px;margin:0 3px;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -1101,7 +1104,9 @@ function onScreenMsg(o, c){
     case 'ready':
       if (c){ c.ready = true; c.mode = o.mode === 'pad' ? 'pad' : 'gyro'; }
       net.ready = true; aim.mode = o.mode === 'pad' ? 'pad' : 'gyro';
-      if (net.clients.length === 1 && !vs.active) onCtrlReady(); else refreshLobby();
+      if (game.state === 'home' && c && c === net.clients[0]){ c.seat = 'shooter'; sendToClient(c, { t:'go', seat:'nav' }); break; }
+      if (net.clients.length === 1 && !vs.active && !hd.active && (!menu.sel || menu.sel === 'gallery')) onCtrlReady();
+      else refreshLobby();
       break;
     case 'rc': if (hd.active && c && c.seat === 'gunner' && c.aim){ c.aim.padX = 0; c.aim.padY = 0; } else if (isShooter){ aim.padX = 0; aim.padY = 0; toast('Controller re-centered'); } break;
     case 'pi': sendToClient(c, { t:'po', ts:o.ts }); break;
@@ -1139,6 +1144,12 @@ function onCtrlMsg(o){
     case 'abok': abStartCd(o.cd); break;
     case 'abno': { const b = $('#btn-ability'); if (b){ b.classList.remove('nope'); void b.offsetWidth; b.classList.add('nope'); } } break;
     case 'hst': hordeState(o); break;
+    case 'padctx':
+      if ($('#scr-pad').classList.contains('active')){
+        if (o.btn) $('#btn-fire').textContent = o.btn;
+        if (o.hint) $('#pad-hint').textContent = o.hint;
+      }
+      break;
   }
 }
 function refreshLinkLabel(){
@@ -1386,6 +1397,7 @@ async function enterGame(reason){
   reqWakeLock();
 }
 function onCtrlReady(){
+  if (vs.active || hd.active || (menu.sel && menu.sel !== 'gallery')){ refreshLobby(); return; }
   if (vs.active) return;
   if (net.clients.length > 1){ refreshLobby(); return; }
   if (game.state === 'play' || game.state === 'count') return;
@@ -1403,7 +1415,7 @@ function showOverlay(kind){
     inner.innerHTML = '<div class="big">Ready to fire</div><p class="hintline">' +
       (game.mouse ? 'Move the mouse to aim. Click anywhere to shoot.' : 'Aim with your phone — the crosshair follows it. Press <b>FIRE</b> to start a 60-second round.') +
       '</p><p class="hintline" style="opacity:.75">Aqua orbs 100 · amber darts 250 · gold stars 500 · skip the ✕ mines</p>' +
-      (game.mouse ? btn('ovl-start','Start round') + btn('ovl-menu','Modes') : vsHintHTML());
+      (game.mouse ? btn('ovl-start','Start round') + btn('ovl-menu','Home') : vsHintHTML());
   } else if (kind === 'end'){
     const acc = game.shots ? Math.round(100*game.hits/game.shots) : 0;
     inner.innerHTML = '<div class="eyebrow">Round complete</div><div class="big">' + game.score.toLocaleString() + '</div>' +
@@ -1430,7 +1442,7 @@ function showOverlay(kind){
         ? '<div class="mutline">' + nf.muts.map(m => '<span class="mut">' + (({blackout:'Blackout',wind:'Crosswind',wells:'Gravity wells'})[m] || m) + '</span>').join('') + '</div>'
         : '') +
       (menu.sel === 'draft' ? '<p class="hintline">Ban \u2192 secret pick \u2192 fight. Decks stay hidden until they hit the sky.</p>' : '') +
-      '<button class="btn btn-ghost" id="ovl-menu">Modes</button>';
+      '<button class="btn btn-ghost" id="ovl-menu">Home</button>';
   } else if (kind === 'vscal'){
     inner.innerHTML = '<div class="ring" style="width:26px;height:26px"></div>' +
       '<div class="big">' + (shooterC() ? shooterC().pid : 'Shooter') + ' is calibrating</div>' +
@@ -1651,7 +1663,7 @@ function loop(){
   ptr.trail.unshift({ x: ptr.x, y: ptr.y });
   if (ptr.trail.length > 9) ptr.trail.pop();
 
-  if (game.queueFire){ game.queueFire = false; if (vs.active) vsShoot(ptr.x, ptr.y); else shoot(ptr.x, ptr.y); }
+  if (game.queueFire){ game.queueFire = false; if (vs.active) vsShoot(ptr.x, ptr.y); else if (game.state === 'home') homeSelect(ptr.x, ptr.y); else shoot(ptr.x, ptr.y); }
 
   if (vs.active){
     const wdt = dt * game.tScale;
@@ -1668,6 +1680,8 @@ function loop(){
     render(t / 1000);
     return;
   }
+
+  if (game.state === 'home') homeFrame(dt);
 
   const playing = game.state === 'play' && !game.paused;
   const drifting = playing || game.state === 'wait' || game.state === 'ready' || game.state === 'end';
@@ -1771,6 +1785,8 @@ function render(tm){
   if (vs.active) vsRenderOver(tm);
   if (vs.active && nf.on && nf.muts.includes('blackout')) nfDark(tm);
   if (hd.active) hdRenderOver(tm);
+
+  if (game.state === 'home') drawHome(tm);
 
   // crosshair + trail
   if (hd.active){
@@ -1914,11 +1930,18 @@ function colorOf(id){ return net.clients[0] && net.clients[0].pid === id ? 'p1' 
 function refreshLobby(){
   if (net.role !== 'screen' || !game.running || vs.active || hd.active) return;
   if (!menu.sel && net.clients.length === 1 && net.clients[0].kind === 'relay') menu.sel = 'gallery';
-  if (!menu.sel){ game.state = 'wait'; showOverlay('menu'); menuBroadcast(); return; }
+  if (!menu.sel){
+    if (net.clients.some(c => c.kind === 'relay')){ game.state = 'wait'; showOverlay('menu'); menuBroadcast(); return; }
+    enterHome(); return;
+  }
   lobBroadcast();
   if (menu.sel === 'gallery'){
     if (!net.clients.length && game.mouse){ game.state = 'ready'; showOverlay('ready'); return; }
-    if (net.ready){ game.state = 'ready'; showOverlay('ready'); }
+    if (net.ready){
+      game.state = 'ready'; showOverlay('ready');
+      const p1 = net.clients[0];
+      if (p1) sendToClient(p1, { t:'padctx', btn:'FIRE', hint:'Fire to start \u00b7 pop everything' });
+    }
     else showOverlay('linked-wait');
     return;
   }
@@ -1943,8 +1966,8 @@ function goVersusLobby(){
 }
 function vsHintHTML(){
   if (net.clients.length === 1 && net.clients[0].kind === 'relay') return '';
-  return '<p class="hintline" style="opacity:.75">A second phone can join with the same code \u2014 or hit Modes to switch.</p>' +
-    '<button class="btn btn-ghost" id="ovl-menu">Modes</button>';
+  return codeLineHTML() + '<p class="hintline" style="opacity:.75">A second phone can join any time \u2014 or press Home to switch.</p>' +
+    '<button class="btn btn-ghost" id="ovl-menu">Home</button>';
 }
 function vsSwapSeats(){
   if (vs.active || net.clients.length !== 2) return;
@@ -2635,6 +2658,26 @@ function ctrlLobby(o){
     show('scr-lobby');
     return;
   }
+  if (lobMode === 'home'){
+    $('#lb-seatname').textContent = 'Navigator \u2014 you drive the big screen';
+    $('#lb-mode').textContent = 'Home';
+    $('#lb-swap').style.display = 'none';
+    const hb = $('#lb-ready');
+    hb.style.display = ''; hb.textContent = 'Point & select';
+    hb.classList.remove('btn-aqua'); hb.classList.add('btn-primary');
+    $('#lb-other').textContent = 'Enable motion, set center, then aim at the screen like a remote.';
+    show('scr-lobby');
+    return;
+  }
+  if (lobMode === 'wait2'){
+    $('#lb-seatname').textContent = 'Linked';
+    $('#lb-mode').textContent = 'Home';
+    $('#lb-swap').style.display = 'none';
+    $('#lb-ready').style.display = 'none';
+    $('#lb-other').textContent = (o.other && o.other.pid ? o.other.pid : 'P1') + ' is choosing a channel\u2026';
+    show('scr-lobby');
+    return;
+  }
   $('#lb-ready').style.display = '';
   $('#lb-ic').textContent = lobMode === 'horde' ? '\ud83c\udf0a' : (mp && net.seat === 'spawner' ? '\ud83c\udccf' : '\ud83c\udfaf');
   $('#lb-seatname').textContent = lobMode === 'horde'
@@ -2703,8 +2746,23 @@ function ctrlNeedCal(){
 }
 function ctrlGo(o){
   net.seat = o.seat;
+  if (o.seat === 'nav'){ enterPadNav(); return; }
   if (o.seat === 'spawner') enterDeck(o.half, o.cards);
   else enterPadVS(o.half, o.ab, o.seat === 'gunner');
+}
+function enterPadNav(){
+  clearInterval(dkTimer); dkTimer = null;
+  show('scr-pad');
+  $('#pad-hint').textContent = 'Point at the big screen \u00b7 press SELECT';
+  $('#btn-fire').textContent = 'SELECT';
+  $('#pad-score').style.display = 'none';
+  $('#pad-hp').style.display = 'none';
+  padAbility(null);
+  clearInterval(net.timers.sendLoop);
+  net.timers.sendLoop = setInterval(ctrlSendTick, 33);
+  clearInterval(net.timers.ping);
+  net.timers.ping = setInterval(() => sendMsg({ t:'pi', ts: now() }), 2000);
+  reqWakeLock(); checkRotate();
 }
 function enterPadVS(half, ab, gunner){
   clearInterval(dkTimer); dkTimer = null;
@@ -2712,6 +2770,7 @@ function enterPadVS(half, ab, gunner){
   $('#pad-hint').textContent = gunner
     ? ((net.ctrlMode === 'gyro' ? 'Tilt to aim' : 'Drag anywhere to aim') + ' \u00b7 don\u2019t shoot the \u2715')
     : ((net.ctrlMode === 'gyro' ? 'Tilt to aim' : 'Drag anywhere to aim') + ' \u00b7 Half ' + (half || 1));
+  $('#btn-fire').textContent = 'FIRE';
   padAbility(ab || null);
   $('#pad-score').style.display = ''; $('#pad-score').textContent = 'You 0';
   $('#pad-hp').style.display = ''; $('#pad-hp').textContent = 'HP ' + BAL.hpMax;
@@ -2854,6 +2913,194 @@ function ctrlRes(o){
     tie ? 'Dead heat' : won ? 'You win!' : 'Defeat', o.line || '');
   if (navigator.vibrate && net.haptics) navigator.vibrate(won ? [30,60,30,60,60] : [80]);
 }
+/* =====================================================================
+   HOME — pointer-driven channel grid
+===================================================================== */
+const HOME = { hov: -1, sc: [], flash: null, shake: null, lastHov: -1 };
+const HOME_TILES = [
+  { mode:'gallery',   n:'Gallery',    g:'GA' },
+  { mode:'horde',     n:'Horde',      g:'HD' },
+  { mode:'versus',    n:'Versus',     g:'VS' },
+  { mode:'draft',     n:'Draft',      g:'DR' },
+  { mode:'nightfall', n:'Nightfall',  g:'NF' },
+  { mode:'mduel',     n:'Mouse Duel', g:'MD' },
+  null, null, null, null, null, null, null, null, null, null
+];
+function homeRects(){
+  const topPad = Math.max(84, H * 0.14), botPad = 64, mx = Math.max(40, W * 0.08), gap = Math.round(Math.min(W, H) * 0.018) + 8;
+  let tw = (W - mx * 2 - gap * 3) / 4;
+  let th = (H - topPad - botPad - gap * 3) / 4;
+  const ratio = 1.42;
+  if (tw / th > ratio) tw = th * ratio; else th = tw / ratio;
+  const gw = tw * 4 + gap * 3, gh = th * 4 + gap * 3;
+  const x0 = (W - gw) / 2, y0 = topPad + (H - topPad - botPad - gh) / 2;
+  const out = [];
+  for (let i = 0; i < 16; i++){
+    const cx = x0 + (i % 4) * (tw + gap) + tw / 2;
+    const cy = y0 + Math.floor(i / 4) * (th + gap) + th / 2;
+    out.push({ cx, cy, w: tw, h: th });
+  }
+  return out;
+}
+function homeFrame(dt){
+  const rects = homeRects();
+  let hov = -1;
+  for (let i = 0; i < 16; i++){
+    const r = rects[i];
+    if (Math.abs(ptr.x - r.cx) < r.w / 2 && Math.abs(ptr.y - r.cy) < r.h / 2){ hov = i; break; }
+  }
+  HOME.hov = hov;
+  if (hov !== HOME.lastHov){
+    if (hov >= 0 && HOME_TILES[hov]) sfx.ui();
+    HOME.lastHov = hov;
+  }
+  for (let i = 0; i < 16; i++){
+    const tgt = (i === hov && HOME_TILES[i]) ? 1.09 : 1;
+    HOME.sc[i] = (HOME.sc[i] || 1) + (tgt - (HOME.sc[i] || 1)) * Math.min(1, dt * 11);
+  }
+  if (HOME.flash && now() - HOME.flash.t > 400) HOME.flash = null;
+  if (HOME.shake && now() - HOME.shake.t > 380) HOME.shake = null;
+}
+function rrect(x, y, w, h, r){
+  cx2.beginPath();
+  cx2.moveTo(x + r, y);
+  cx2.arcTo(x + w, y, x + w, y + h, r);
+  cx2.arcTo(x + w, y + h, x, y + h, r);
+  cx2.arcTo(x, y + h, x, y, r);
+  cx2.arcTo(x, y, x + w, y, r);
+  cx2.closePath();
+}
+function drawHome(tm){
+  const rects = homeRects();
+  cx2.save();
+  cx2.textAlign = 'center';
+  cx2.fillStyle = 'rgba(154,163,199,.9)';
+  cx2.font = '700 11px -apple-system, system-ui, sans-serif';
+  const t0y = Math.max(46, H * 0.075);
+  cx2.fillText('C H O O S E   A   C H A N N E L', W / 2, t0y);
+  cx2.fillStyle = '#e9edff';
+  cx2.font = '900 ' + Math.round(Math.min(44, W * 0.035)) + 'px -apple-system, system-ui, sans-serif';
+  cx2.fillText('AIR POINTER', W / 2, t0y + Math.min(44, W * 0.035) + 6);
+  for (let i = 0; i < 16; i++){
+    const r = rects[i], tile = HOME_TILES[i], sc = HOME.sc[i] || 1;
+    let ox = 0;
+    if (HOME.shake && HOME.shake.i === i) ox = Math.sin((now() - HOME.shake.t) / 26) * 6;
+    const w = r.w * sc, h = r.h * sc, x = r.cx - w / 2 + ox, y = r.cy - h / 2;
+    cx2.save();
+    if (!tile){
+      cx2.globalAlpha = 0.55;
+      cx2.fillStyle = 'rgba(255,255,255,.028)';
+      rrect(x, y, w, h, 16); cx2.fill();
+      cx2.strokeStyle = 'rgba(255,255,255,.07)'; cx2.lineWidth = 1; cx2.stroke();
+      cx2.fillStyle = 'rgba(154,163,199,.4)';
+      cx2.font = '800 10px ui-monospace, monospace';
+      cx2.fillText('S O O N', r.cx + ox, r.cy + 4);
+      cx2.restore();
+      continue;
+    }
+    const ok = modeOK(tile.mode);
+    const hov = HOME.hov === i;
+    cx2.globalAlpha = ok ? 1 : 0.42;
+    if (hov && ok){ cx2.shadowColor = 'rgba(94,242,216,.8)'; cx2.shadowBlur = 26; }
+    const g = cx2.createLinearGradient(x, y, x, y + h);
+    g.addColorStop(0, hov && ok ? 'rgba(94,242,216,.16)' : 'rgba(255,255,255,.075)');
+    g.addColorStop(1, 'rgba(255,255,255,.035)');
+    cx2.fillStyle = g;
+    rrect(x, y, w, h, 16); cx2.fill();
+    cx2.shadowBlur = 0;
+    cx2.strokeStyle = hov && ok ? 'rgba(94,242,216,.85)' : 'rgba(255,255,255,.13)';
+    cx2.lineWidth = hov && ok ? 1.8 : 1;
+    cx2.stroke();
+    if (HOME.flash && HOME.flash.i === i){
+      const ft = (now() - HOME.flash.t) / 400;
+      cx2.globalAlpha = (1 - ft) * 0.5;
+      cx2.fillStyle = '#5ef2d8';
+      rrect(x, y, w, h, 16); cx2.fill();
+      cx2.globalAlpha = ok ? 1 : 0.42;
+    }
+    if (ok){
+      cx2.save();
+      rrect(x, y, w, h, 16); cx2.clip();
+      const per = w * 2.4, off = ((tm * (hov ? 260 : 60)) % per) - per / 2;
+      const sg = cx2.createLinearGradient(x + off - 60, y, x + off + 60, y + h);
+      sg.addColorStop(0, 'rgba(255,255,255,0)');
+      sg.addColorStop(0.5, 'rgba(255,255,255,' + (hov ? 0.14 : 0.05) + ')');
+      sg.addColorStop(1, 'rgba(255,255,255,0)');
+      cx2.fillStyle = sg;
+      cx2.fillRect(x, y, w, h);
+      cx2.restore();
+    }
+    cx2.fillStyle = hov && ok ? '#5ef2d8' : 'rgba(94,242,216,.75)';
+    cx2.font = '800 ' + Math.round(h * 0.17) + 'px ui-monospace, monospace';
+    cx2.fillText(tile.g, r.cx + ox, r.cy - h * 0.08);
+    cx2.fillStyle = ok ? '#e9edff' : 'rgba(233,237,255,.75)';
+    cx2.font = '800 ' + Math.round(h * 0.145) + 'px -apple-system, system-ui, sans-serif';
+    cx2.fillText(tile.n, r.cx + ox, r.cy + h * 0.16);
+    if (!ok){
+      const m = MODES.find(mm => mm.id === tile.mode);
+      cx2.fillStyle = 'rgba(255,122,26,.9)';
+      cx2.font = '800 ' + Math.max(9, Math.round(h * 0.095)) + 'px -apple-system, system-ui, sans-serif';
+      cx2.fillText((m && m.req ? m.req.toUpperCase() : 'LOCKED'), r.cx + ox, r.cy + h * 0.34);
+    }
+    cx2.restore();
+  }
+  cx2.globalAlpha = 1;
+  cx2.textAlign = 'center';
+  if (net.code && net.clients.length < 2 && !net.clients.some(c => c.kind === 'relay')){
+    cx2.fillStyle = 'rgba(154,163,199,.75)';
+    cx2.font = '600 12.5px -apple-system, system-ui, sans-serif';
+    const cy = H - 30;
+    cx2.fillText('Join code', W / 2 - 64, cy);
+    cx2.fillStyle = '#5ef2d8';
+    cx2.font = '800 15px ui-monospace, monospace';
+    cx2.fillText(net.code.split('').join(' '), W / 2 + 4, cy);
+    cx2.fillStyle = 'rgba(154,163,199,.6)';
+    cx2.font = '600 12.5px -apple-system, system-ui, sans-serif';
+    cx2.fillText('\u00b7 second phone: same page', W / 2 + 118, cy);
+  }
+  cx2.restore();
+}
+function homeSelect(x, y){
+  const rects = homeRects();
+  let i = -1;
+  for (let k = 0; k < 16; k++){
+    const r = rects[k];
+    if (Math.abs(x - r.cx) < r.w / 2 && Math.abs(y - r.cy) < r.h / 2){ i = k; break; }
+  }
+  if (i < 0) return;
+  const tile = HOME_TILES[i];
+  if (!tile){ HOME.shake = { i, t: now() }; return; }
+  if (!modeOK(tile.mode)){
+    HOME.shake = { i, t: now() };
+    sfx.bomb();
+    const m = MODES.find(mm => mm.id === tile.mode);
+    toast(m && m.req ? 'Needs ' + m.req : 'Not available yet');
+    return;
+  }
+  HOME.flash = { i, t: now() };
+  sfx.go();
+  setTimeout(() => { if (game.state === 'home') hostSetMode(tile.mode); }, 240);
+}
+function enterHome(){
+  if (net.role !== 'screen' && !game.mouse) return;
+  game.state = 'home'; game.mode = 'gallery';
+  showOverlay('hide');
+  HOME.hov = -1; HOME.lastHov = -1; HOME.flash = null; HOME.shake = null;
+  game.targets = [];
+  const p1 = net.clients[0];
+  if (p1 && p1.kind !== 'relay'){
+    if (p1.ready){
+      p1.seat = 'shooter';
+      sendToClient(p1, { t:'go', seat:'nav' });
+    } else {
+      sendToClient(p1, { t:'lob', mode:'home', picker: p1.pid,
+        you: { seat: 'nav', rdy: false, pid: p1.pid }, other: { here: net.clients.length > 1 } });
+    }
+  }
+  const p2 = net.clients[1];
+  if (p2) sendToClient(p2, { t:'lob', mode:'wait2', picker: p1 ? p1.pid : null,
+    you: { seat: 'wait', rdy: false, pid: p2.pid }, other: { here: true, pid: p1 ? p1.pid : 'P1' } });
+}
 $('#lb-ready').addEventListener('click', () => { sfx.ui(); vsReadyTap(); });
 $('#lb-swap').addEventListener('click', () => { sfx.ui(); sendMsg({ t:'swap' }); });
 $('#lb-exit').addEventListener('click', fullReset);
@@ -2897,10 +3144,14 @@ function hostSetMode(id){
   refreshLobby();
 }
 function menuBroadcast(){
-  const list = MODES.map(m => ({ id: m.id, ic: m.ic, n: m.n, ok: modeOK(m.id) }));
+  const list = MODES.map(x => ({ id: x.id, n: x.n, req: x.req, ok: modeOK(x.id) }));
   for (const c of net.clients) sendToClient(c, { t:'menu', list, picker: net.clients[0] ? net.clients[0].pid : null, you: c.pid });
 }
 const MGLYPH = { gallery:'GA', horde:'HD', versus:'VS', draft:'DR', nightfall:'NF', mduel:'MD' };
+function codeLineHTML(){
+  if (!net.code || net.role !== 'screen' || net.clients.length >= 2 || net.clients.some(c => c.kind === 'relay')) return '';
+  return '<p class="codeline">Join code <b>' + net.code + '</b> \u00b7 second phone: same page \u2192 Use as Controller</p>';
+}
 function menuHTML(){
   const n = net.clients.length;
   const cards = MODES.map(m => {
@@ -2913,11 +3164,11 @@ function menuHTML(){
       '<span class="md" style="display:block">' + m.d + '</span>' +
       '<span class="mreq" style="display:block">' + req + '</span></button>';
   }).join('');
-  const sub = n === 0 ? 'Mouse demo \u2014 phones can join with the code any time.'
+  const sub = n === 0 ? 'Mouse demo \u2014 to pair phones, reload and start as Screen.'
     : n === 1 ? (net.clients[0].pid + ' picks on their phone \u2014 or click here. A second phone unlocks Versus.')
     : 'P1 picks on their phone \u2014 or click here.';
   return '<div class="eyebrow">Choose a mode</div><div class="big">What are we playing?</div>' +
-    '<div class="modegrid">' + cards + '</div><p class="hintline">' + sub + '</p>';
+    '<div class="modegrid">' + cards + '</div>' + codeLineHTML() + '<p class="hintline">' + sub + '</p>';
 }
 /* =====================================================================
    DRAFT — new cards, abilities, ban/pick flow
@@ -3309,7 +3560,7 @@ function hdStartWave(){
     sfx.klaxon();
   } else {
     hd.phase = 'wave';
-    hd.budget = 10 + hd.wave * 5;
+    hd.budget = Math.round((10 + hd.wave * 5) * (hd.gunners.length > 1 ? 1 : 0.62));
     hd.budget0 = hd.budget;
     hd.spawnT = 0.8;
     showAnn('WAVE ' + hd.wave);
@@ -3345,7 +3596,7 @@ function hdSpawnMinion(){
 }
 function hdSpawnBoss(){
   const r = Math.min(W, H) * 0.085 + 24;
-  const hp = 24 + hd.wave * 3;
+  const hp = Math.round((24 + hd.wave * 3) * (hd.gunners.length > 1 ? 1 : 0.6));
   hd.boss = { x: W/2, y: H * 0.22, r, hp, hp0: hp, sh: Math.random() * 6.28, gap: 1.15, t: 45,
     minT: 2.2, ph: Math.random() * 6.28, flash: 0, leaving: false };
 }
@@ -3372,7 +3623,7 @@ function hordeFrame(wdt, rdt, tms){
     hd.spawnT -= wdt;
     if (hd.spawnT <= 0 && hd.budget > 0){
       hdSpawn();
-      hd.spawnT = Math.max(0.5, 1.05 - hd.wave * 0.02) + Math.random() * 0.35;
+      hd.spawnT = (Math.max(0.5, 1.05 - hd.wave * 0.02) + Math.random() * 0.35) * (hd.gunners.length > 1 ? 1 : 1.25);
     }
     if (hd.budget <= 0 && !game.targets.some(t => !t.pop && !t.leaked)) hdBreak(4, 'CLEAR');
   } else if (hd.phase === 'boss' && hd.boss){
@@ -3381,7 +3632,7 @@ function hordeFrame(wdt, rdt, tms){
       b.sh += wdt * 0.9;
       b.x = W/2 + Math.sin(tms * 0.4 + b.ph) * W * 0.22;
       b.minT -= wdt;
-      if (b.minT <= 0){ b.minT = Math.max(1.6, 3 - hd.wave * 0.05); hdSpawnMinion(); }
+      if (b.minT <= 0){ b.minT = Math.max(1.6, 3 - hd.wave * 0.05) * (hd.gunners.length > 1 ? 1 : 1.35); hdSpawnMinion(); }
       b.t -= wdt;
       b.flash = Math.max(0, b.flash - rdt * 3);
       if (b.t <= 0){
@@ -3622,10 +3873,10 @@ function hordeLobbyHTML(){
   const note = cs.length >= 2
     ? '<p class="hintline">Shared 100 HP. Shoot a \u2715 mine and you go down \u2014 your partner shoots your crosshair 3\u00d7 to revive.</p>'
     : cs.length === 1
-      ? '<p class="hintline">Press <b>Ready</b> on the phone. A second phone can join with the same code \u2014 revives need a partner.</p>'
+      ? codeLineHTML() + '<p class="hintline">Press <b>Ready</b> on the phone \u2014 revives need a partner.</p>'
       : '<p class="hintline">Endless waves \u2014 a boss every fifth. Don\u2019t shoot the \u2715 mines.</p>';
   return '<div class="eyebrow">Co-op</div><div class="big">Horde</div>' + cards + note + start +
-    '<button class="btn btn-ghost" id="ovl-menu">Modes</button>';
+    '<button class="btn btn-ghost" id="ovl-menu">Home</button>';
 }
 function hdRenderOver(tm){
   const b = hd.boss;
@@ -3737,6 +3988,9 @@ function drawGunnerCrosshairs(tm){
    Controller side — menu, draft, ability, horde state
 ===================================================================== */
 function ctrlMenu(o){
+  lobMode = 'menu';
+  $('#lb-ready').style.display = 'none';
+  $('#lb-swap').style.display = 'none';
   clearTimeout(net.timers.lobWait);
   clearInterval(dkTimer); dkTimer = null;
   clearInterval(net.timers.sendLoop);
@@ -3756,10 +4010,11 @@ function ctrlMenu(o){
   if (o.picker === net.pid){
     box.style.display = 'flex';
     box.innerHTML = o.list.map(m =>
-      '<button data-m="' + m.id + '"' + (m.ok ? '' : ' disabled') + '><span style="font-size:22px">' + m.ic + '</span><span>' + m.n +
-      '<span class="d">' + (m.ok ? 'Tap to select' : 'Needs a different setup') + '</span></span></button>'
+      '<button data-m="' + m.id + '"' + (m.ok ? '' : ' disabled') + '><span class="mglyph">' + (MGLYPH[m.id] || '') + '</span><span>' + m.n +
+      '<span class="d">' + (m.ok ? 'Tap to select' : 'Needs ' + (m.req || 'a different setup')) + '</span></span></button>'
     ).join('');
-    $('#lb-other').textContent = 'You choose \u2014 it shows on the big screen.';
+    $('#lb-other').textContent = 'You choose \u2014 it shows on the big screen.' +
+      (net.clients ? '' : '') + (net.code ? ' Second phone: same page, code ' + net.code + '.' : '');
   } else {
     box.style.display = 'none';
     box.innerHTML = '';
