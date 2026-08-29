@@ -1339,6 +1339,8 @@ function onCtrlMsg(o){
       $('#pad-hp').style.display = ''; $('#pad-hp').textContent = o.b || '';
       break;
     case 'ds': {
+      net.noRotateHint = true;
+      checkRotate();
       const sp = $('#scr-pad');
       sp.classList.remove('dz-ok', 'dz-bad');
       if (o.ph === 'holster'){
@@ -1714,6 +1716,7 @@ function checkRotate(){
   const onPad = net.role === 'ctrl' && $('#scr-pad').classList.contains('active');
   const rh = $('#rotate-hint');
   if (!onPad){ rh.style.display = 'none'; return; }
+  if (net.noRotateHint){ rh.style.display = 'none'; return; }
   const landscape = window.innerWidth > window.innerHeight * 1.05;
   const bad = net.padWheel ? !landscape : landscape;
   rh.style.display = bad ? 'flex' : 'none';
@@ -3287,6 +3290,7 @@ function enterPadVS(half, ab, gunner){
     ? ((net.ctrlMode === 'gyro' ? 'Tilt to aim' : 'Drag anywhere to aim') + ' \u00b7 don\u2019t shoot the \u2715')
     : ((net.ctrlMode === 'gyro' ? 'Tilt to aim' : 'Drag anywhere to aim') + ' \u00b7 Half ' + (half || 1));
   net.padWheel = null;
+  net.noRotateHint = false;
   $('#scr-pad').classList.remove('wheel', 'race');
   $('#btn-fire').textContent = 'FIRE';
   padAbility(ab || null);
@@ -3784,7 +3788,7 @@ function mrRender(tm){
   fx2Draw();
 }
 /* ---------------- TILT RACER ---------------- */
-const TRK = { depth: 240, maxV: 880, acc: 540, brakeF: 950, revMax: -180, coast: 240,
+const TRK = { depth: 330, maxV: 880, acc: 540, brakeF: 950, revMax: -180, coast: 240,
   steer: 2.0, cf: 34, laps: 3, len: 30000, curvK: 0.011, railAt: 0.95 };
 const TRACKS = [
   [[3200,0],[4300,0.9],[3200,0],[4300,0.9],[3200,0],[4300,0.9],[3200,0],[4300,0.9]],
@@ -3818,8 +3822,20 @@ function trBuildTrack(){
 }
 function trCurve(s){
   s = ((s % TRK.len) + TRK.len) % TRK.len;
-  for (let i2 = tr.segs.length - 1; i2 >= 0; i2--)
-    if (s >= tr.segStart[i2]) return tr.segs[i2][1];
+  for (let i2 = tr.segs.length - 1; i2 >= 0; i2--){
+    if (s >= tr.segStart[i2]){
+      const c0 = tr.segs[i2][1];
+      const segLen = tr.segs[i2][0];
+      const local = s - tr.segStart[i2];
+      const B = 600;
+      if (local > segLen - B){
+        const c1 = tr.segs[(i2 + 1) % tr.segs.length][1];
+        const t2 = (local - (segLen - B)) / B;
+        return c0 + (c1 - c0) * t2;
+      }
+      return c0;
+    }
+  }
   return 0;
 }
 function trStart(){
@@ -4957,7 +4973,7 @@ function bwStart(){
   bwPrompt();
 }
 function bwPathX(shot, d){
-  return clamp(shot.aim * 0.85 + shot.curve * 0.6 * d * d, -1.4, 1.4);
+  return clamp(shot.aim * 0.85 * Math.min(1, d * 1.15) + shot.curve * 0.6 * d * d, -1.4, 1.4);
 }
 function bwRoll(o){
   if (bw.phase !== 'aim') return;
@@ -5397,7 +5413,8 @@ function hkFrame(dt){
   const R = hkRink();
   hk.gunners.forEach((g, i2) => {
     const p = gunnerPtr(g);
-    const tx = clamp(p.x, R.x + R.pw / 2, R.x + R.w - R.pw / 2);
+    const fr3 = clamp(p.x / W, 0, 1);
+    const tx = R.x + R.pw / 2 + fr3 * (R.w - R.pw);
     const ox = g.mx;
     g.mx += (tx - g.mx) * (1 - Math.pow(0.00001, dt));
     g.pvx = clamp((g.mx - ox) / Math.max(dt, 0.001), -2000, 2000);
@@ -5425,6 +5442,7 @@ function hkFrame(dt){
     const steps = b.sp > 560 ? 2 : 1;
     for (let s2 = 0; s2 < steps; s2++){
       const sd = dt / steps;
+      const py0 = b.y;
       b.x += b.vx * sd;
       b.y += b.vy * sd;
       if (b.x - R.br < R.x){ b.x = R.x + R.br; b.vx = Math.abs(b.vx); hkTick(); }
@@ -5432,14 +5450,14 @@ function hkFrame(dt){
       const botY = R.y + R.h - R.inset;
       const topY = R.y + R.inset;
       const bg2 = hk.gunners[0];
-      if (b.vy > 0 && b.y + R.br >= botY && b.y + R.br <= botY + 26 && bg2){
+      if (b.vy > 0 && py0 + R.br <= botY + 14 && b.y + R.br >= botY && bg2){
         if (Math.abs(b.x - bg2.mx) <= R.pw / 2 + R.br * 0.6){
           b.y = botY - R.br;
           hkPaddleHit(bg2.mx, bg2.pvx, true);
         }
       }
       const topPad = hk.gunners[1] || hk.ai;
-      if (topPad && b.vy < 0 && b.y - R.br <= topY && b.y - R.br >= topY - 26){
+      if (topPad && b.vy < 0 && py0 - R.br >= topY - 14 && b.y - R.br <= topY){
         const px2 = hk.gunners[1] ? hk.gunners[1].mx : hk.ai.x;
         const pvx = hk.gunners[1] ? hk.gunners[1].pvx : (hk.ai.vx || 0);
         if (Math.abs(b.x - px2) <= R.pw / 2 + R.br * 0.6){
@@ -6110,7 +6128,7 @@ $('#dk-exit').addEventListener('click', fullReset);
    MODE MENU + registry
 ===================================================================== */
 const menu = { sel: null };
-const BUILD = 'v12';
+const BUILD = 'v13';
 try { $('#vtag').textContent = 'build ' + BUILD; $('#vtag2').textContent = 'build ' + BUILD; } catch(e){}
 const MODES = [
   { id:'gallery',  ic:'\ud83c\udfaf', n:'Gallery',      d:'Solo 60-second target rush.', req:'1 phone or mouse' },
